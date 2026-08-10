@@ -1,0 +1,17 @@
+<Application x:Class="InstantTranslate.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+        <SolidColorBrush x:Key="AccentBrush" Color="#2563EB" />
+        <SolidColorBrush x:Key="AccentLightBrush" Color="#76A0F2" />
+        <SolidColorBrush x:Key="PopupBackgroundBrush" Color="#F214203B" />
+        <SolidColorBrush x:Key="PopupBorderBrush" Color="#2E4E86" />
+        <SolidColorBrush x:Key="PopupButtonBrush" Color="#1F2E4A" />
+        <SolidColorBrush x:Key="PopupButtonHoverBrush" Color="#30466E" />
+        <SolidColorBrush x:Key="PopupButtonBorderBrush" Color="#405A86" />
+        <SolidColorBrush x:Key="PopupTextBrush" Color="#F8FAFC" />
+        <SolidColorBrush x:Key="PopupMutedBrush" Color="#94A3B8" />
+        <SolidColorBrush x:Key="PopupBadgeBrush" Color="#131D30" />
+    </Application.Resources>
+</Application>
