@@ -1,113 +1,152 @@
 <p align="center">
-  <img src="src/InstantTranslate.App/Assets/AppLogo.png" width="132" alt="InstantTranslate logo">
+  <img src="src/InstantTranslate.App/Assets/AppLogo.png" width="128" alt="InstantTranslate logo">
 </p>
 
 <h1 align="center">InstantTranslate</h1>
 
-<p align="center">Windows 全局划词翻译工具 · DeepSeek 流式响应 · 无焦点浮窗</p>
+<p align="center">Windows 全局划词翻译 · DeepSeek 流式响应 · 安静、快速、默认不留记录</p>
 
-InstantTranslate 是一个 Windows 全局划词翻译工具。它在鼠标拖选文本后，通过 Windows UI Automation 读取选区，调用 DeepSeek 官方 API 流式翻译，并在鼠标附近显示不抢焦点的置顶译文浮窗。
+InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具。在大多数可选择文字的应用中拖选文本，它会读取选区、调用 DeepSeek，并在鼠标附近显示不抢焦点的译文浮窗。
 
-## 当前能力
+## 15 秒开始使用
 
-- 低级全局鼠标钩子识别左键拖选，普通点击不触发翻译。
-- 优先使用 UI Automation `TextPattern.GetSelection()` 读取选中文字。
-- 自动跳过 InstantTranslate 自身的设置窗口和浮窗。
-- 鼠标释放后立即显示无焦点加载浮窗，首个流式分片到达后原位切换为译文。
-- 自动判断翻译方向：纯中文译为英文；中英混合、英文及其他文本优先译为简体中文。
-- 译文浮窗提供切换语言、复制原文、复制译文和置顶图标按钮，并通过悬停提示说明用途。
-- 置顶会把当前结果保留为可拖动的独立快照；继续划词会打开新的临时浮窗，不覆盖已置顶内容。
-- 内置深海蓝、紫罗兰、翡翠绿、暖橙色和玫瑰红主题，也可输入 `#RRGGBB` 自定义强调色。
-- 无焦点、无任务栏入口的临时浮窗会在下一次外部鼠标按下时隐藏。
-- 递增请求版本与 `CancellationToken`：连续选词时只允许最后一次结果显示。
-- DeepSeek 官方 OpenAI-compatible SSE 流式 Provider；默认使用低延迟 `deepseek-v4-flash` 并关闭思考模式。
-- 可在设置中切换到完全离线的 Mock Provider。
-- 系统托盘菜单：设置、启用/停用、退出。
-- 普通设置保存到 `%LOCALAPPDATA%\InstantTranslate\settings.json`。
-- DeepSeek API Key 通过密码框录入并保存到 Windows 凭据管理器，不写入 JSON。
-- 默认不记录选词和译文，不使用剪贴板取词，不模拟 `Ctrl+C`；只有用户点击复制按钮时才写入剪贴板。
+1. 下载并解压 `InstantTranslate-v0.3.1-win-x64.zip`。
+2. 运行 `InstantTranslate.exe`；首次启动会打开设置。
+3. 填写 DeepSeek API Key，点击“Test connection”（切换中文后为“测试连接”），成功后保存。
+4. 在记事本、浏览器或文档中用鼠标拖选文字。
 
-## 环境与运行
+程序常驻系统托盘。再次双击 EXE 不会重复安装鼠标钩子，而会唤起已有实例的设置页。
 
-普通用户可从 GitHub Releases 下载 `InstantTranslate-v0.1.0-win-x64.zip`，解压后直接运行 `InstantTranslate.exe`，无需另装 .NET。
+## v0.3 亮点
 
-源码开发要求 Windows 10/11 和 .NET 8 SDK：
+- 程序界面默认使用英文；设置页右上角的“中文 / English”按钮可以即时切换，保存后同步应用到浮窗提示、托盘菜单和通知。
+- 非译文界面内嵌使用 Source Sans Pro，无需朋友的电脑另行安装字体。
+- 英文译文和中文译文可以分别选择字体；英文包含 Times New Roman、Arial、Source Sans Pro、Georgia、Calibri、Cambria，中文包含黑体、微软雅黑、宋体和楷体。
 
-```powershell
-dotnet restore .\InstantTranslate.sln
-dotnet build .\InstantTranslate.sln --configuration Debug
-dotnet test .\InstantTranslate.sln --configuration Debug --no-build
-dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj
-```
+- 自动判断方向：纯中文译为英文；中英混合、英文和其他文本优先译为简体中文。
+- DeepSeek OpenAI-compatible SSE 流式翻译，首段立即显示，后续合并刷新，长译文更顺滑。
+- 完成结果使用内存 LRU 缓存；相同配置和文本再次翻译可直接显示，不再次请求 API。
+- 浮窗出现时不抢焦点，靠近选区并自动避让屏幕边缘；主动点击正文后可正常选字和复制。支持关闭、复制原文、复制译文、中英互换、保留、拖动、缩放和纵向滚动。
+- 译文可像普通文本一样框选，右键支持复制和全选；在本程序内框选不会触发新的翻译。
+- 英文译文默认使用 Times New Roman，中文默认使用黑体；两者均可在设置中独立修改。字号可在浮窗平滑调节，也可在设置中指定新窗口默认值。
+- 浅灰、不透明、无边框圆角界面；紧凑实色工具条具有明确的悬停、按下和保留状态。设置页采用三段卡片结构与固定保存栏。
+- 断网、鉴权、限流或超时不再让加载窗无故消失；错误会保留在原浮窗中，再次翻译失败时保留旧译文。
+- 单实例运行，避免重复托盘、重复钩子和重复 API 费用。
+- 自动取词默认不再改写系统剪贴板：先使用 UI Automation，再尝试标准 Win32/RichEdit/Scintilla 控件的窗口消息读取。只有在设置中主动打开“Compatibility clipboard fallback”时，才会为微信等自绘应用使用临时 `WM_COPY` 兼容回退。
 
-程序启动后常驻系统托盘。首次运行会打开设置页；填写 DeepSeek API Key 并保存即可使用。右键托盘图标可再次打开设置、切换启用状态或退出。
+## 微信和自绘应用
 
-设置页中的“颜色风格”可选择五套内置主题；选择“自定义”后可输入类似 `#2563EB` 的颜色值。保存后，新主题会立即应用到浮窗。
+Windows 应用取词能力并不统一。InstantTranslate 按以下顺序尝试：
 
-DeepSeek 默认配置：
+1. UI Automation `TextPattern.GetSelection()`；
+2. 标准 Win32/RichEdit/Scintilla 控件的直接选区读取，不触碰剪贴板；
+3. 仅在设置中主动开启兼容模式后，才使用窗口级 `WM_COPY`；
+4. 用户主动复制后的手动翻译。
+
+默认的自动取词链路不会发送 `WM_COPY`、模拟键盘或修改剪贴板，也不会把 `c` 输入当前编辑框。兼容模式是有意关闭的最后手段，因为任何 `WM_COPY` 方案都无法保证对第三方剪贴板格式、历史记录和监听器完全无副作用。
+
+微信部分版本的消息区是自绘界面，既不公开 UI Automation 选区，也不响应标准 `WM_COPY`。这时使用稳定的手动方式：
+
+1. 在微信中选中文字并由你自己按 `Ctrl+C`；
+2. 按 `Ctrl+Shift+T`，或右键托盘图标选择“翻译剪贴板”。
+
+这个入口不会注入任何按键，也可以在关闭“启用鼠标划词翻译”后单独使用。
+
+## 浮窗操作
+
+- “译为中文 / 译为英文”：把当前显示结果翻译为另一种语言，复用原窗口位置和尺寸。
+- 原文图标：复制最初选中的文字。
+- 译文图标：优先复制你在译文中框选的部分，否则复制全部译文。
+- 图钉：保留窗口。保留后可拖动文字外区域，并从任意边缘或角落调整尺寸；继续划词会创建另一临时浮窗，正在生成的保留结果也不会被新选词截断。
+- ×：立即关闭当前浮窗。
+
+译文显示后，无论是否保留，都可以从任意边缘或角落调整尺寸；长文本或大字号超出当前高度时会在正文内部滚动。取消保留不会立即关闭窗口；下一次点击其他区域才按临时窗口规则收起。
+
+## DeepSeek 设置
+
+默认配置：
 
 - Endpoint：`https://api.deepseek.com`
-- Model：`deepseek-v4-flash`（速度优先）
+- 速度优先模型：`deepseek-v4-flash`
 - 可选模型：`deepseek-v4-pro`
-- API：`POST /chat/completions`，`stream: true`，`thinking: disabled`
+- API：`POST /chat/completions`、`stream: true`、`thinking: disabled`
 
-模型和接口信息以 [DeepSeek 官方 API 文档](https://api-docs.deepseek.com/) 为准。旧模型名 `deepseek-chat` 和 `deepseek-reasoner` 已不作为默认选项。
+远程 Endpoint 必须使用 HTTPS；只有 `localhost` 和回环地址允许 HTTP，避免 API Key 和选中文字被明文传输。模型与接口变化以 [DeepSeek 官方 API 文档](https://api-docs.deepseek.com/) 为准。
 
-开发环境可用以下命令验证托盘、WPF Dispatcher 和全局钩子是否能完成启动与释放；程序会在约 750 ms 后自行退出，且不会调用 DeepSeek：
+API Key 由密码框录入并保存在 Windows 凭据管理器中，不写入设置 JSON。设置页可以在不保存的情况下测试连接，也可清空密钥后保存以删除凭据。
 
-```powershell
-dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --no-build -- --smoke-test
-```
+## 托盘菜单
 
-## MVP 验收方法
+- 当前版本与启用状态
+- 翻译剪贴板（`Ctrl+Shift+T`）
+- 启用或暂停自动划词
+- 设置
+- 关于与版本
+- 退出
 
-1. 启动程序，从托盘设置中选择 `DeepSeek API`，填写 API Key，并保留默认 `deepseek-v4-flash`。
-2. 在 Windows 记事本中输入并拖选一段英文。
-3. 鼠标释放后应立即出现“正在翻译…”动画，随后原位切换并流式显示译文；原窗口不应丢失键盘焦点。
-4. 在 Edge 普通网页正文中重复测试。
-5. 单击或在 InstantTranslate 设置窗口内拖动时不应出现译文。
-6. 快速连续拖选时，只应显示最后一次选词结果，前一次 HTTP 流应被取消。
-7. 下一次鼠标按下应立即隐藏现有浮窗。
-8. 点击置顶图标后，可按住译文区域拖动浮窗；继续划词时旧结果应保留，新结果应出现在另一个临时浮窗中。
-9. 中文原文默认译为英文；中英混合默认整体译为中文；语言按钮可对同一原文反向重译。
-
-如果暂时不想消耗 API 额度，可在设置中切换到 Mock Provider。Mock 包含 `Hello world` → `你好，世界`、`Good morning` → `早上好`；其他非空输入固定返回“这是模拟译文。”。
-
-## 打包
-
-运行以下脚本会生成 Windows x64 自包含单文件程序和 ZIP 压缩包：
-
-```powershell
-.\scripts\Publish.ps1 -Version 0.1.0
-```
-
-输出位于 `artifacts/release/`。由于当前版本未购买代码签名证书，Windows SmartScreen 首次运行时可能显示未知发布者提示。
-
-## 代码结构
-
-- `Hooks/`：全局鼠标钩子与拖选判定。
-- `Selection/`：UI Automation 取词与文本规范化。
-- `Translation/`：流式 Provider 契约、DeepSeek SSE 实现、Provider 工厂和 Mock 实现。
-- `Services/`：请求版本控制、端到端协调器、托盘与自身进程判断。
-- `Settings/`：基础设置、JSON 存储与 Windows 凭据管理器。
-- `Windows/`：设置窗口和无焦点译文浮窗。
-
-`DeepSeekStreamingProvider` 通过 `IAsyncEnumerable<TranslationChunk>` 逐段产出 `content`，忽略推理字段，并严格响应取消令牌。`TranslationProviderFactory` 复用一个带连接池的 `HttpClient`，避免每次选词重新建连。
-
-## 已知限制
-
-- 仅响应鼠标拖选；暂不支持双击选词和纯键盘选区。
-- 只支持提供 UI Automation TextPattern 的应用。终端、画布渲染文本、部分 Electron 应用或高权限窗口可能无法取词。
-- 不包含剪贴板回退，因此 UIA 不可用时会静默跳过。
-- 普通权限进程不能读取以管理员权限运行的应用；MVP 不请求提权。
-- 缓存、开机启动、安装包、自动更新和请求用量统计尚未实现。
+设置页还可控制登录 Windows 后自动启动。启动项只写入当前用户；移动 EXE 后请重新运行并保存一次设置，以更新路径。
 
 ## 隐私与安全
 
-- 选择 DeepSeek Provider 时，选中文字会发送到配置的 Endpoint；选择 Mock Provider 时完全离线。
-- 不持久化选词、译文或运行日志。
-- API Key 使用 Windows 凭据管理器条目 `InstantTranslate/DeepSeekApiKey`。
-- 应用以当前用户普通权限运行，不启用 `uiAccess`；只有明确点击复制按钮时才修改剪贴板。
+- 使用 DeepSeek Provider 时，原文会发送到你配置的 Endpoint；Mock Provider 完全离线。
+- 默认不持久化原文、译文或运行日志。
+- 缓存只存在于当前进程内，默认最多 200 条、约 400 万字符预算、30 分钟有效；退出即清空。
+- API Key 保存在 Windows Credential Manager 的 `InstantTranslate/DeepSeekApiKey`。
+- 自动取词默认不注入键盘、不修改剪贴板；终端应用始终禁用自动剪贴板回退。若确实需要兼容自绘应用，可在设置中主动打开兼容模式。
+- 跨窗口或跨进程拖动会被拒绝，UI Automation 焦点候选也必须属于鼠标命中的同一进程。
+- 应用以普通用户权限运行，不请求管理员权限或 `uiAccess`。
+
+## 从源码运行
+
+要求 Windows 10/11 和 .NET 8 SDK：
+
+```powershell
+dotnet restore .\InstantTranslate.sln
+dotnet build .\InstantTranslate.sln --configuration Release --no-restore
+dotnet test .\InstantTranslate.sln --configuration Release --no-build --no-restore
+dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj
+```
+
+不调用 DeepSeek 的启动烟雾测试：
+
+```powershell
+dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --configuration Release --no-build -- --smoke-test
+dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --configuration Release --no-build -- --popup-smoke-test
+dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --configuration Release --no-build -- --popup-snapshot-test
+dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --configuration Release --no-build -- --settings-snapshot-test
+```
+
+两个快照模式只渲染本应用自己的 WPF 窗口，用于检查浮窗选区、长文滚动和设置页布局，不读取桌面或其他应用画面。
+
+## 打包
+
+```powershell
+.\scripts\Publish.ps1 -Version 0.3.1
+```
+
+脚本会依次恢复依赖、Release 构建、运行全部测试、发布自包含单文件程序、执行烟雾测试、生成 ZIP 和 SHA-256 校验文件。结果位于 `artifacts/release/`。
+
+当前版本没有商业代码签名；在部分电脑上首次运行可能出现 Windows SmartScreen“未知发布者”提示。
+
+## 已知限制
+
+- 目前主要响应鼠标拖选；双击选词和纯键盘选区不会自动触发。
+- 自绘画布、部分 Electron/微信版本和高权限窗口可能无法通过无剪贴板方式自动读取；默认请使用复制后 `Ctrl+Shift+T`，或在设置中明确打开兼容性剪贴板回退。
+- 尚未加入 OCR、安装器、自动更新和 ARM64 包。
+- 个别精简版 Windows 可能没有黑体、宋体或楷体；WPF 会使用系统可用字体回退，Source Sans Pro 界面字体则已随程序内嵌。
+
+## 第三方字体
+
+界面字体 Source Sans Pro 来自 Adobe Source Sans 项目，依据 SIL Open Font License 1.1 随程序分发；完整字体许可包含在成品的 `Assets/Fonts/LICENSE-SourceSans.md`。
+
+## 代码结构
+
+- `Hooks/`：全局鼠标钩子、窗口拖动抑制和全局快捷键。
+- `Selection/`：UI Automation、原生控件取词、可选剪贴板回退和文本规范化。
+- `Translation/`：DeepSeek 流式 Provider、语言方向、内存缓存与更新节流。
+- `Services/`：单实例、请求会话、托盘和端到端协调。
+- `Settings/`：设置、主题、开机启动与 Windows 凭据存储。
+- `Windows/`：设置窗口和无焦点译文浮窗。
 
 ## License
 

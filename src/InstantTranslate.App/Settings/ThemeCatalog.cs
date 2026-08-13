@@ -43,14 +43,14 @@ internal static class ThemeCatalog
         return new ThemePalette(
             accent,
             Blend(accent, "#FFFFFF", 0.38),
-            WithAlpha(Blend("#111827", accent, 0.18), 0xF2),
-            Blend("#334155", accent, 0.38),
-            Blend("#1E293B", accent, 0.16),
-            Blend("#334155", accent, 0.28),
-            Blend("#475569", accent, 0.28),
-            "#F8FAFC",
-            "#94A3B8",
-            Blend("#111827", accent, 0.12));
+            Blend("#E8E8E8", accent, 0.035),
+            Blend("#D7D7D7", accent, 0.12),
+            Blend("#DCDCDC", accent, 0.055),
+            Blend("#CECECE", accent, 0.10),
+            Blend("#D4D4D4", accent, 0.16),
+            "#171717",
+            "#5F6368",
+            accent);
     }
 
     internal static bool TryNormalizeHexColor(string? value, out string normalized)
@@ -80,11 +80,6 @@ internal static class ThemeCatalog
         return $"#{BlendChannel(firstRgb.R, secondRgb.R, firstWeight, secondWeight):X2}"
              + $"{BlendChannel(firstRgb.G, secondRgb.G, firstWeight, secondWeight):X2}"
              + $"{BlendChannel(firstRgb.B, secondRgb.B, firstWeight, secondWeight):X2}";
-    }
-
-    private static string WithAlpha(string rgb, byte alpha)
-    {
-        return $"#{alpha:X2}{rgb.AsSpan(1)}";
     }
 
     private static (byte R, byte G, byte B) ParseRgb(string color)

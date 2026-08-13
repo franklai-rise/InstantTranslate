@@ -10,6 +10,7 @@ namespace InstantTranslate.Translation;
 internal sealed class DeepSeekStreamingProvider : IDeepSeekStreamingProvider
 {
     private const int MaximumErrorMessageLength = 500;
+    private const int MaximumErrorBodyLength = 32 * 1024;
     private readonly HttpClient _httpClient;
 
     public DeepSeekStreamingProvider(HttpClient httpClient, OpenAiCompatibleProviderOptions options)
@@ -39,88 +40,113 @@ internal sealed class DeepSeekStreamingProvider : IDeepSeekStreamingProvider
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Text);
 
-        using var httpRequest = CreateHttpRequest(request);
-        HttpResponseMessage response;
-        try
+        for (var attempt = 0; attempt < 2; attempt++)
         {
-            response = await _httpClient.SendAsync(
-                httpRequest,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (HttpRequestException exception)
-        {
-            throw new TranslationProviderException("无法连接 DeepSeek API，请检查网络和 Endpoint。", exception);
-        }
-
-        using (response)
-        {
-            if (!response.IsSuccessStatusCode)
+            using var httpRequest = CreateHttpRequest(request);
+            HttpResponseMessage response;
+            try
             {
-                var errorMessage = await ReadApiErrorAsync(response, cancellationToken).ConfigureAwait(false);
-                throw new TranslationProviderException(
-                    $"DeepSeek API 返回 {(int)response.StatusCode}：{errorMessage}");
+                response = await _httpClient.SendAsync(
+                    httpRequest,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (HttpRequestException) when (attempt == 0)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(220), cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+            catch (HttpRequestException exception)
+            {
+                throw new TranslationProviderException("无法连接 DeepSeek API，请检查网络和 Endpoint。", exception);
             }
 
-            await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var reader = new StreamReader(responseStream);
-            var receivedContent = false;
-
-            while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+            using (response)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                if (!response.IsSuccessStatusCode)
                 {
-                    continue;
-                }
-
-                var payload = line["data:".Length..].TrimStart();
-                if (payload.Length == 0)
-                {
-                    continue;
-                }
-
-                if (payload.Equals("[DONE]", StringComparison.Ordinal))
-                {
-                    if (!receivedContent)
+                    if (attempt == 0 && IsRetryableStatusCode(response.StatusCode))
                     {
-                        throw new TranslationProviderException("DeepSeek API 未返回译文内容。");
+                        await Task.Delay(GetRetryDelay(response), cancellationToken).ConfigureAwait(false);
+                        continue;
                     }
 
-                    yield return new TranslationChunk(string.Empty, IsFinal: true);
-                    yield break;
+                    var errorMessage = await ReadApiErrorAsync(response, cancellationToken).ConfigureAwait(false);
+                    throw new TranslationProviderException(
+                        $"DeepSeek API 返回 {(int)response.StatusCode}：{errorMessage}");
                 }
 
-                string? content;
-                try
+                var mediaType = response.Content.Headers.ContentType?.MediaType;
+                if (!string.IsNullOrWhiteSpace(mediaType)
+                    && !mediaType.Equals("text/event-stream", StringComparison.OrdinalIgnoreCase))
                 {
-                    content = ReadContentDelta(payload);
-                }
-                catch (JsonException exception)
-                {
-                    throw new TranslationProviderException("DeepSeek 返回了无法解析的流式数据。", exception);
+                    var responseMessage = await ReadApiErrorAsync(response, cancellationToken).ConfigureAwait(false);
+                    throw new TranslationProviderException($"DeepSeek 返回了非流式响应：{responseMessage}");
                 }
 
-                if (string.IsNullOrEmpty(content))
+                await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                using var reader = new StreamReader(responseStream);
+                var receivedContent = false;
+
+                while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
                 {
-                    continue;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var payload = line["data:".Length..].TrimStart();
+                    if (payload.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (payload.Equals("[DONE]", StringComparison.Ordinal))
+                    {
+                        if (!receivedContent)
+                        {
+                            throw new TranslationProviderException("DeepSeek API 未返回译文内容。");
+                        }
+
+                        yield return new TranslationChunk(string.Empty, IsFinal: true);
+                        yield break;
+                    }
+
+                    string? content;
+                    try
+                    {
+                        content = ReadContentDelta(payload);
+                    }
+                    catch (JsonException exception)
+                    {
+                        throw new TranslationProviderException("DeepSeek 返回了无法解析的流式数据。", exception);
+                    }
+
+                    if (string.IsNullOrEmpty(content))
+                    {
+                        continue;
+                    }
+
+                    receivedContent = true;
+                    yield return new TranslationChunk(content);
                 }
 
-                receivedContent = true;
-                yield return new TranslationChunk(content);
+                if (!receivedContent)
+                {
+                    throw new TranslationProviderException("DeepSeek 流式响应意外结束，未收到译文。");
+                }
+
+                yield return new TranslationChunk(string.Empty, IsFinal: true);
+                yield break;
             }
-
-            if (!receivedContent)
-            {
-                throw new TranslationProviderException("DeepSeek 流式响应意外结束，未收到译文。");
-            }
-
-            yield return new TranslationChunk(string.Empty, IsFinal: true);
         }
+
+        throw new TranslationProviderException("无法连接 DeepSeek API，请检查网络和 Endpoint。");
     }
 
     internal static Uri BuildChatCompletionsUri(Uri endpoint)
@@ -134,6 +160,17 @@ internal sealed class DeepSeekStreamingProvider : IDeepSeekStreamingProvider
     internal static string? ReadContentDelta(string json)
     {
         using var document = JsonDocument.Parse(json);
+        if (document.RootElement.TryGetProperty("error", out var error))
+        {
+            var message = error.TryGetProperty("message", out var errorMessage)
+                ? errorMessage.GetString()
+                : null;
+            throw new TranslationProviderException(
+                string.IsNullOrWhiteSpace(message)
+                    ? "DeepSeek 流式响应包含错误。"
+                    : $"DeepSeek：{Limit(message)}");
+        }
+
         if (!document.RootElement.TryGetProperty("choices", out var choices)
             || choices.ValueKind != JsonValueKind.Array
             || choices.GetArrayLength() == 0)
@@ -186,7 +223,11 @@ internal sealed class DeepSeekStreamingProvider : IDeepSeekStreamingProvider
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
-        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var reader = new StreamReader(stream);
+        var buffer = new char[MaximumErrorBodyLength];
+        var length = await reader.ReadBlockAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        var responseBody = new string(buffer, 0, length);
         try
         {
             using var document = JsonDocument.Parse(responseBody);
@@ -211,5 +252,33 @@ internal sealed class DeepSeekStreamingProvider : IDeepSeekStreamingProvider
         return value.Length <= MaximumErrorMessageLength
             ? value
             : value[..MaximumErrorMessageLength] + "…";
+    }
+
+    private static bool IsRetryableStatusCode(System.Net.HttpStatusCode statusCode)
+    {
+        return statusCode is System.Net.HttpStatusCode.RequestTimeout
+            or System.Net.HttpStatusCode.TooManyRequests
+            or System.Net.HttpStatusCode.BadGateway
+            or System.Net.HttpStatusCode.ServiceUnavailable
+            or System.Net.HttpStatusCode.GatewayTimeout;
+    }
+
+    private static TimeSpan GetRetryDelay(HttpResponseMessage response)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        var delay = retryAfter?.Delta;
+        if (delay is null && retryAfter?.Date is { } retryDate)
+        {
+            delay = retryDate - DateTimeOffset.UtcNow;
+        }
+
+        if (delay is null || delay < TimeSpan.Zero)
+        {
+            delay = TimeSpan.FromMilliseconds(350);
+        }
+
+        return delay > TimeSpan.FromSeconds(2)
+            ? TimeSpan.FromSeconds(2)
+            : delay.Value;
     }
 }

@@ -41,6 +41,40 @@ internal sealed class RequestVersionGate : IDisposable
         }
     }
 
+    public bool TryDetach(long version, out CancellationTokenSource? cancellation)
+    {
+        lock (_syncRoot)
+        {
+            cancellation = null;
+            if (_disposed
+                || version != _version
+                || _activeCancellation is null
+                || _activeCancellation.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            cancellation = _activeCancellation;
+            _activeCancellation = null;
+            return true;
+        }
+    }
+
+    public bool CancelIfCurrent(long version)
+    {
+        lock (_syncRoot)
+        {
+            if (_disposed || version != _version || _activeCancellation is null)
+            {
+                return false;
+            }
+
+            CancelActiveUnsafe();
+            _version++;
+            return true;
+        }
+    }
+
     public void Dispose()
     {
         lock (_syncRoot)

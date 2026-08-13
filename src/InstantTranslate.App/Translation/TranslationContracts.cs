@@ -39,7 +39,13 @@ internal interface ITranslationProviderFactory
 internal sealed record OpenAiCompatibleProviderOptions(
     Uri Endpoint,
     string Model,
-    string ApiKey);
+    string ApiKey)
+{
+    public override string ToString()
+    {
+        return $"Endpoint = {Endpoint}, Model = {Model}, ApiKey = ***";
+    }
+}
 
 internal sealed class TranslationProviderException : Exception
 {

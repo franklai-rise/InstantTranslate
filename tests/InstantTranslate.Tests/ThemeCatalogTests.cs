@@ -10,7 +10,8 @@ public sealed class ThemeCatalogTests
         var palette = ThemeCatalog.Resolve("violet", null);
 
         Assert.Equal("#7C3AED", palette.Accent);
-        Assert.StartsWith("#F2", palette.PopupBackground, StringComparison.Ordinal);
+        Assert.Equal(7, palette.PopupBackground.Length);
+        Assert.StartsWith("#", palette.PopupBackground, StringComparison.Ordinal);
     }
 
     [Theory]

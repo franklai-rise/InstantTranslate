@@ -3,15 +3,28 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
+        <FontFamily x:Key="InterfaceFont">pack://application:,,,/Assets/Fonts/#Source Sans Pro</FontFamily>
+        <!-- Neutral semantic surfaces keep the UI restrained and consistent. -->
+        <SolidColorBrush x:Key="AppWindowBackgroundBrush" Color="#F4F4F4" />
+        <SolidColorBrush x:Key="AppCardBackgroundBrush" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="AppCardBorderBrush" Color="#E1E1E1" />
+        <SolidColorBrush x:Key="AppFieldBackgroundBrush" Color="#FAFAFA" />
+        <SolidColorBrush x:Key="AppFieldBorderBrush" Color="#D2D2D2" />
+        <SolidColorBrush x:Key="AppTextBrush" Color="#171717" />
+        <SolidColorBrush x:Key="AppMutedTextBrush" Color="#666666" />
+        <SolidColorBrush x:Key="AppHoverBrush" Color="#EEEEEE" />
+        <SolidColorBrush x:Key="AppPressedBrush" Color="#E4E4E4" />
+        <SolidColorBrush x:Key="SuccessBrush" Color="#16784A" />
+        <SolidColorBrush x:Key="DangerBrush" Color="#B42318" />
         <SolidColorBrush x:Key="AccentBrush" Color="#2563EB" />
         <SolidColorBrush x:Key="AccentLightBrush" Color="#76A0F2" />
-        <SolidColorBrush x:Key="PopupBackgroundBrush" Color="#F214203B" />
-        <SolidColorBrush x:Key="PopupBorderBrush" Color="#2E4E86" />
-        <SolidColorBrush x:Key="PopupButtonBrush" Color="#1F2E4A" />
-        <SolidColorBrush x:Key="PopupButtonHoverBrush" Color="#30466E" />
-        <SolidColorBrush x:Key="PopupButtonBorderBrush" Color="#405A86" />
-        <SolidColorBrush x:Key="PopupTextBrush" Color="#F8FAFC" />
-        <SolidColorBrush x:Key="PopupMutedBrush" Color="#94A3B8" />
-        <SolidColorBrush x:Key="PopupBadgeBrush" Color="#131D30" />
+        <SolidColorBrush x:Key="PopupBackgroundBrush" Color="#E6E6E6" />
+        <SolidColorBrush x:Key="PopupBorderBrush" Color="#D3D3D3" />
+        <SolidColorBrush x:Key="PopupButtonBrush" Color="#DCDCDC" />
+        <SolidColorBrush x:Key="PopupButtonHoverBrush" Color="#CECECE" />
+        <SolidColorBrush x:Key="PopupButtonBorderBrush" Color="#D0D0D0" />
+        <SolidColorBrush x:Key="PopupTextBrush" Color="#171717" />
+        <SolidColorBrush x:Key="PopupMutedBrush" Color="#5F6368" />
+        <SolidColorBrush x:Key="PopupBadgeBrush" Color="#2563EB" />
     </Application.Resources>
 </Application>

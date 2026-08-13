@@ -46,6 +46,8 @@ internal sealed class SettingsStore
             settings = AppSettings.Default;
         }
 
+        settings = NormalizeSettings(settings);
+
         try
         {
             return settings with { DeepSeekApiKey = _credentialStore.ReadApiKey() };
@@ -64,13 +66,46 @@ internal sealed class SettingsStore
             ?? throw new InvalidOperationException("设置文件路径无效。");
         Directory.CreateDirectory(directory);
 
-        var temporaryPath = _settingsPath + ".tmp";
-        var json = JsonSerializer.Serialize(settings with { DeepSeekApiKey = string.Empty }, JsonOptions);
-        File.WriteAllText(temporaryPath, json);
-        File.Move(temporaryPath, _settingsPath, overwrite: true);
+        var normalizedSettings = NormalizeSettings(settings);
+        var temporaryPath = $"{_settingsPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            var json = JsonSerializer.Serialize(
+                normalizedSettings with { DeepSeekApiKey = string.Empty },
+                JsonOptions);
+            File.WriteAllText(temporaryPath, json);
+            File.Move(temporaryPath, _settingsPath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
         if (persistApiKey)
         {
             _credentialStore.SaveApiKey(settings.DeepSeekApiKey);
         }
+    }
+
+    internal static AppSettings NormalizeSettings(AppSettings? settings)
+    {
+        var value = settings ?? AppSettings.Default;
+        return value with
+        {
+            UiLanguage = UiLanguageCatalog.Normalize(value.UiLanguage),
+            EnglishTranslationFontFamily = TranslationFontCatalog.NormalizeEnglish(
+                value.EnglishTranslationFontFamily),
+            ChineseTranslationFontFamily = TranslationFontCatalog.NormalizeChinese(
+                value.ChineseTranslationFontFamily),
+        };
     }
 }

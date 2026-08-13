@@ -3,27 +3,35 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:ClassModifier="internal"
         WindowStyle="None"
-        ResizeMode="NoResize"
+        ResizeMode="CanResize"
         SizeToContent="WidthAndHeight"
         ShowInTaskbar="False"
         ShowActivated="False"
+        WindowStartupLocation="Manual"
         Topmost="True"
         AllowsTransparency="True"
         Background="Transparent"
-        Focusable="False">
+        Focusable="True"
+        FontFamily="{DynamicResource InterfaceFont}"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        SizeChanged="PopupWindow_SizeChanged"
+        TextOptions.TextFormattingMode="Display">
     <Window.Resources>
         <Style x:Key="ActionButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="30" />
-            <Setter Property="Height" Value="28" />
-            <Setter Property="Margin" Value="4,0,0,0" />
-            <Setter Property="Padding" Value="5" />
-            <Setter Property="Background" Value="{DynamicResource PopupButtonBrush}" />
+            <Setter Property="Width" Value="34" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Margin" Value="2,0,0,0" />
+            <Setter Property="Padding" Value="4" />
+            <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource PopupTextBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource PopupButtonBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Focusable" Value="False" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="ToolTipService.InitialShowDelay" Value="250" />
+            <Setter Property="ToolTipService.InitialShowDelay" Value="320" />
+            <Setter Property="ToolTipService.BetweenShowDelay" Value="80" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -39,169 +47,364 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="ButtonChrome" Property="Background" Value="{DynamicResource PopupButtonHoverBrush}" />
-                                <Setter TargetName="ButtonChrome" Property="BorderBrush" Value="{DynamicResource AccentLightBrush}" />
+                                <Setter TargetName="ButtonChrome" Property="BorderBrush" Value="Transparent" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="ButtonChrome" Property="Background" Value="{DynamicResource AccentBrush}" />
-                                <Setter TargetName="ButtonChrome" Property="BorderBrush" Value="{DynamicResource AccentLightBrush}" />
+                                <Setter TargetName="ButtonChrome" Property="Background" Value="{DynamicResource AccentLightBrush}" />
                             </Trigger>
                             <Trigger Property="Tag" Value="Pinned">
                                 <Setter TargetName="ButtonChrome" Property="Background" Value="{DynamicResource AccentBrush}" />
-                                <Setter TargetName="ButtonChrome" Property="BorderBrush" Value="{DynamicResource AccentLightBrush}" />
+                                <Setter Property="Foreground" Value="White" />
+                                <Setter TargetName="ButtonChrome" Property="BorderBrush" Value="Transparent" />
+                                <Setter TargetName="ButtonChrome" Property="BorderThickness" Value="0" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.42" />
+                                <Setter Property="Foreground" Value="{DynamicResource PopupMutedBrush}" />
+                                <Setter Property="Cursor" Value="Arrow" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style TargetType="ToolTip">
+            <Setter Property="FontFamily" Value="{DynamicResource InterfaceFont}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="7,4" />
+        </Style>
+
+        <ControlTemplate x:Key="SliderTrackTemplate" TargetType="RepeatButton">
+            <Border Height="3"
+                    Margin="0,0"
+                    VerticalAlignment="Center"
+                    Background="{TemplateBinding Background}"
+                    CornerRadius="1.5" />
+        </ControlTemplate>
+
+        <Style x:Key="SliderThumbStyle" TargetType="Thumb">
+            <Setter Property="Width" Value="14" />
+            <Setter Property="Height" Value="14" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Grid Width="18" Height="18" Background="Transparent">
+                            <Ellipse x:Name="ThumbCore"
+                                     Width="14"
+                                     Height="14"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"
+                                     Fill="{DynamicResource AccentBrush}" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ThumbCore" Property="Width" Value="16" />
+                                <Setter TargetName="ThumbCore" Property="Height" Value="16" />
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="ThumbCore" Property="Fill" Value="{DynamicResource AccentLightBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="FontSizeSliderStyle" TargetType="Slider">
+            <Setter Property="Height" Value="24" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="IsMoveToPointEnabled" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid Height="24" Background="Transparent">
+                            <Track x:Name="PART_Track"
+                                   Margin="2,0"
+                                   VerticalAlignment="Center"
+                                   IsDirectionReversed="False"
+                                   Maximum="{TemplateBinding Maximum}"
+                                   Minimum="{TemplateBinding Minimum}"
+                                   Value="{TemplateBinding Value}">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Background="{DynamicResource AccentBrush}"
+                                                  Command="{x:Static Slider.DecreaseLarge}"
+                                                  Focusable="False"
+                                                  Template="{StaticResource SliderTrackTemplate}" />
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Background="{DynamicResource PopupButtonHoverBrush}"
+                                                  Command="{x:Static Slider.IncreaseLarge}"
+                                                  Focusable="False"
+                                                  Template="{StaticResource SliderTrackTemplate}" />
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource SliderThumbStyle}" />
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
-    <Border x:Name="PopupSurface"
-            MaxWidth="560"
-            MaxHeight="380"
-            Padding="12"
-            CornerRadius="9"
-            Background="{DynamicResource PopupBackgroundBrush}"
-            BorderBrush="{DynamicResource PopupBorderBrush}"
-            BorderThickness="1"
-            MouseLeftButtonDown="PopupSurface_MouseLeftButtonDown">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.28" />
-        </Border.Effect>
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition x:Name="ContentRow" Height="Auto" />
+        </Grid.RowDefinitions>
 
-            <StackPanel x:Name="LoadingPanel"
-                        Grid.Row="0"
-                        Grid.RowSpan="2"
-                        MinWidth="112"
-                        Margin="2"
-                        Orientation="Horizontal"
-                        VerticalAlignment="Center">
-                <Grid Width="20" Height="20" Margin="0,0,9,0">
-                    <Ellipse Stroke="{DynamicResource PopupMutedBrush}" StrokeThickness="2" />
-                    <Ellipse Stroke="{DynamicResource PopupTextBrush}"
-                             StrokeThickness="2.3"
-                             StrokeDashArray="2,4"
-                             StrokeStartLineCap="Round"
-                             StrokeEndLineCap="Round"
-                             RenderTransformOrigin="0.5,0.5">
-                        <Ellipse.RenderTransform>
-                            <RotateTransform Angle="0" />
-                        </Ellipse.RenderTransform>
-                        <Ellipse.Triggers>
-                            <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                         From="0"
-                                                         To="360"
-                                                         Duration="0:0:0.75"
-                                                         RepeatBehavior="Forever" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </EventTrigger>
-                        </Ellipse.Triggers>
-                    </Ellipse>
-                </Grid>
-                <TextBlock VerticalAlignment="Center"
-                           Foreground="{DynamicResource PopupTextBrush}"
-                           FontFamily="Segoe UI, Microsoft YaHei UI"
-                           FontSize="14"
-                           Text="正在翻译…" />
-            </StackPanel>
-
+        <Border x:Name="ActionBarSurface"
+                Grid.Row="0"
+                Margin="0,0,4,7"
+                Padding="5,4"
+                Visibility="Collapsed"
+                Background="{DynamicResource PopupButtonBrush}"
+                BorderBrush="Transparent"
+                BorderThickness="0"
+                CornerRadius="11"
+                HorizontalAlignment="Right">
             <StackPanel x:Name="ActionPanel"
-                        Grid.Row="0"
                         Visibility="Collapsed"
                         Orientation="Horizontal"
                         HorizontalAlignment="Right">
+                <TextBlock x:Name="ActionStatusText"
+                           Margin="7,0,6,0"
+                           VerticalAlignment="Center"
+                           Visibility="Collapsed"
+                           Foreground="{DynamicResource AccentBrush}"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           Text="Copied" />
+                <StackPanel x:Name="FontSizePanel"
+                            Margin="5,0,5,0"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            ToolTip="Drag to adjust text size">
+                    <TextBlock VerticalAlignment="Center"
+                               Margin="0,0,4,0"
+                               Foreground="{DynamicResource PopupMutedBrush}"
+                               FontSize="10.5"
+                               Text="A" />
+                    <Slider x:Name="FontSizeSlider"
+                            Width="88"
+                            Minimum="12"
+                            Maximum="30"
+                            Value="16.5"
+                            SmallChange="0.5"
+                            LargeChange="2"
+                            TickFrequency="0.5"
+                            IsSnapToTickEnabled="False"
+                            Style="{StaticResource FontSizeSliderStyle}"
+                            ValueChanged="FontSizeSlider_ValueChanged" />
+                    <TextBlock VerticalAlignment="Center"
+                               Margin="4,0,0,0"
+                               Foreground="{DynamicResource PopupMutedBrush}"
+                               FontSize="15.5"
+                               Text="A" />
+                    <TextBlock x:Name="FontSizeValueText"
+                               Width="25"
+                               Margin="5,0,0,0"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource PopupMutedBrush}"
+                               FontSize="10.5"
+                               Text="16.5"
+                               TextAlignment="Right" />
+                </StackPanel>
                 <Button x:Name="DirectionButton"
+                        Width="Auto"
+                        MinWidth="76"
+                        Margin="2,0,2,0"
+                        Padding="10,4"
                         Style="{StaticResource ActionButtonStyle}"
-                        ToolTip="切换翻译语言"
-                        Click="DirectionButton_Click">
-                    <Viewbox Width="17" Height="17">
-                        <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                              Data="M6.99,11 3,15 6.99,19 6.99,16 14,16 14,14 6.99,14ZM17.01,5 17.01,8 10,8 10,10 17.01,10 17.01,13 21,9Z" />
-                    </Viewbox>
-                </Button>
+                        FontSize="12"
+                        FontWeight="Medium"
+                        Content="To Chinese"
+                        ToolTip="Switch translation language"
+                        Click="DirectionButton_Click" />
                 <Button x:Name="CopySourceButton"
                         Style="{StaticResource ActionButtonStyle}"
-                        ToolTip="复制原文"
+                        ToolTip="Copy source"
                         Click="CopySourceButton_Click">
-                    <Grid Width="18" Height="18">
-                        <Viewbox>
-                            <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                  Data="M16,1 4,1C2.9,1 2,1.9 2,3L2,17 4,17 4,3 16,3ZM19,5 8,5C6.9,5 6,5.9 6,7L6,21C6,22.1 6.9,23 8,23L19,23C20.1,23 21,22.1 21,21L21,7C21,5.9 20.1,5 19,5ZM19,21 8,21 8,7 19,7Z" />
+                    <Grid Width="24" Height="24">
+                        <Viewbox Width="20" Height="20" HorizontalAlignment="Left" VerticalAlignment="Top">
+                            <Canvas Width="24" Height="24">
+                                <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      Data="M8,3H19A2,2 0 0 1 21,5V16A2,2 0 0 1 19,18H17V16H19V5H8V7H6V5A2,2 0 0 1 8,3ZM5,7H14A2,2 0 0 1 16,9V20A2,2 0 0 1 14,22H5A2,2 0 0 1 3,20V9A2,2 0 0 1 5,7ZM5,9V20H14V9H5Z" />
+                            </Canvas>
                         </Viewbox>
-                        <Border Width="10"
-                                Height="10"
+                        <Border Width="13"
+                                Height="13"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Bottom"
-                                Background="{DynamicResource PopupBadgeBrush}"
-                                CornerRadius="5">
+                                Background="{DynamicResource AccentBrush}"
+                                CornerRadius="6.5">
                             <TextBlock HorizontalAlignment="Center"
                                        VerticalAlignment="Center"
-                                       Foreground="{DynamicResource PopupTextBrush}"
-                                       FontFamily="Microsoft YaHei UI"
-                                       FontSize="7"
+                                       Foreground="White"
+                                       FontFamily="{DynamicResource InterfaceFont}"
+                                       FontSize="8.5"
                                        FontWeight="SemiBold"
-                                       Text="原" />
+                                       Text="S" />
                         </Border>
                     </Grid>
                 </Button>
                 <Button x:Name="CopyTranslationButton"
                         Style="{StaticResource ActionButtonStyle}"
-                        ToolTip="复制译文"
+                        ToolTip="Copy translation"
                         Click="CopyTranslationButton_Click">
-                    <Grid Width="18" Height="18">
-                        <Viewbox>
-                            <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                  Data="M16,1 4,1C2.9,1 2,1.9 2,3L2,17 4,17 4,3 16,3ZM19,5 8,5C6.9,5 6,5.9 6,7L6,21C6,22.1 6.9,23 8,23L19,23C20.1,23 21,22.1 21,21L21,7C21,5.9 20.1,5 19,5ZM19,21 8,21 8,7 19,7Z" />
+                    <Grid Width="24" Height="24">
+                        <Viewbox Width="20" Height="20" HorizontalAlignment="Left" VerticalAlignment="Top">
+                            <Canvas Width="24" Height="24">
+                                <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      Data="M8,3H19A2,2 0 0 1 21,5V16A2,2 0 0 1 19,18H17V16H19V5H8V7H6V5A2,2 0 0 1 8,3ZM5,7H14A2,2 0 0 1 16,9V20A2,2 0 0 1 14,22H5A2,2 0 0 1 3,20V9A2,2 0 0 1 5,7ZM5,9V20H14V9H5Z" />
+                            </Canvas>
                         </Viewbox>
-                        <Border Width="10"
-                                Height="10"
+                        <Border Width="13"
+                                Height="13"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Bottom"
-                                Background="{DynamicResource PopupBadgeBrush}"
-                                CornerRadius="5">
+                                Background="{DynamicResource AccentBrush}"
+                                CornerRadius="6.5">
                             <TextBlock HorizontalAlignment="Center"
                                        VerticalAlignment="Center"
-                                       Foreground="{DynamicResource PopupTextBrush}"
-                                       FontFamily="Microsoft YaHei UI"
-                                       FontSize="7"
+                                       Foreground="White"
+                                       FontFamily="{DynamicResource InterfaceFont}"
+                                       FontSize="8.5"
                                        FontWeight="SemiBold"
-                                       Text="译" />
+                                       Text="T" />
                         </Border>
                     </Grid>
                 </Button>
                 <Button x:Name="PinButton"
                         Style="{StaticResource ActionButtonStyle}"
-                        ToolTip="置顶并保留"
+                        ToolTip="Keep window"
                         Click="PinButton_Click">
-                    <Viewbox Width="17" Height="17">
-                        <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                              Data="M16,9 16,4 17,3 17,2 7,2 7,3 8,4 8,9C8,10.66 6.66,12 5,12L5,14 11,14 11,21 13,21 13,14 19,14 19,12C17.34,12 16,10.66 16,9Z" />
-                    </Viewbox>
+                    <Grid Width="24" Height="24">
+                        <Viewbox Width="20" Height="20">
+                            <Canvas Width="24" Height="24">
+                                <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      Data="M16,9V4L17,3V2H7V3L8,4V9C8,10.66 6.66,12 5,12V14H11V21H13V14H19V12C17.34,12 16,10.66 16,9Z" />
+                            </Canvas>
+                        </Viewbox>
+                    </Grid>
+                </Button>
+                <Button x:Name="CloseButton"
+                        Style="{StaticResource ActionButtonStyle}"
+                        ToolTip="Close"
+                        Click="CloseButton_Click">
+                    <Grid Width="24" Height="24">
+                        <Viewbox Width="20" Height="20">
+                            <Canvas Width="24" Height="24">
+                                <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="2"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      Data="M6,6 L18,18 M18,6 L6,18" />
+                            </Canvas>
+                        </Viewbox>
+                    </Grid>
                 </Button>
             </StackPanel>
+        </Border>
 
-            <TextBlock x:Name="TranslationTextBlock"
-                       Grid.Row="1"
-                       Margin="2,10,2,1"
-                       Visibility="Collapsed"
-                       Foreground="{DynamicResource PopupTextBrush}"
-                       FontFamily="Segoe UI, Microsoft YaHei UI"
-                       FontSize="15"
-                       LineHeight="23"
-                       TextWrapping="Wrap"
-                       TextTrimming="CharacterEllipsis" />
-        </Grid>
-    </Border>
+        <Border x:Name="PopupSurface"
+                Grid.Row="1"
+                MaxWidth="820"
+                MaxHeight="600"
+                ClipToBounds="True"
+                Padding="16,14"
+                CornerRadius="12"
+                Background="{DynamicResource PopupBackgroundBrush}"
+                BorderBrush="Transparent"
+                BorderThickness="0"
+                MouseLeftButtonDown="PopupSurface_MouseLeftButtonDown">
+            <Grid>
+                <StackPanel x:Name="LoadingPanel"
+                            MinWidth="150"
+                            Margin="0"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Grid x:Name="LoadingSpinner" Width="17" Height="17" Margin="0,0,10,0">
+                        <Ellipse Stroke="{DynamicResource PopupButtonHoverBrush}" StrokeThickness="1.6" />
+                        <Ellipse Stroke="{DynamicResource AccentBrush}"
+                                 StrokeThickness="2"
+                                 StrokeDashArray="2,5"
+                                 StrokeStartLineCap="Round"
+                                 StrokeEndLineCap="Round"
+                                 RenderTransformOrigin="0.5,0.5">
+                            <Ellipse.RenderTransform>
+                                <RotateTransform Angle="0" />
+                            </Ellipse.RenderTransform>
+                            <Ellipse.Triggers>
+                                <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                             From="0"
+                                                             To="360"
+                                                             Duration="0:0:0.7"
+                                                             RepeatBehavior="Forever" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </EventTrigger>
+                            </Ellipse.Triggers>
+                        </Ellipse>
+                    </Grid>
+                    <TextBlock x:Name="LoadingTextBlock"
+                               MaxWidth="420"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource PopupTextBrush}"
+                               FontSize="13.5"
+                               TextWrapping="Wrap"
+                               Text="Translating…" />
+                </StackPanel>
+
+                <RichTextBox x:Name="TranslationRichTextBox"
+                             MinWidth="220"
+                             MaxWidth="788"
+                             MaxHeight="548"
+                             Margin="0"
+                             Padding="0"
+                             Visibility="Collapsed"
+                             Background="Transparent"
+                             Foreground="{DynamicResource PopupTextBrush}"
+                             BorderThickness="0"
+                             FontFamily="Times New Roman"
+                             FontSize="16.5"
+                             IsReadOnly="True"
+                             IsUndoEnabled="False"
+                             IsDocumentEnabled="False"
+                             IsInactiveSelectionHighlightEnabled="True"
+                             Focusable="True"
+                             Cursor="IBeam"
+                             SelectionBrush="{DynamicResource AccentLightBrush}"
+                             SelectionOpacity="0.42"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Disabled"
+                             HorizontalAlignment="Stretch"
+                             VerticalAlignment="Stretch"
+                             VerticalContentAlignment="Top"
+                             ScrollViewer.PanningMode="VerticalOnly"
+                             PreviewMouseLeftButtonDown="TranslationRichTextBox_PreviewMouseLeftButtonDown">
+                    <RichTextBox.ContextMenu>
+                        <ContextMenu FontFamily="{DynamicResource InterfaceFont}"
+                                     FontSize="12.5">
+                            <MenuItem x:Name="CopySelectionMenuItem"
+                                      Header="Copy"
+                                      Command="{x:Static ApplicationCommands.Copy}"
+                                      CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                            <Separator />
+                            <MenuItem x:Name="SelectAllMenuItem"
+                                      Header="Select all"
+                                      Command="{x:Static ApplicationCommands.SelectAll}"
+                                      CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                        </ContextMenu>
+                    </RichTextBox.ContextMenu>
+                </RichTextBox>
+            </Grid>
+        </Border>
+    </Grid>
 </Window>

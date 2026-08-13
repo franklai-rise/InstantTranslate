@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using InstantTranslate.Models;
 
 namespace InstantTranslate.Interop;
@@ -8,9 +9,33 @@ internal static class NativeMethods
     internal const int WhMouseLl = 14;
     internal const int WmQuit = 0x0012;
     internal const int WmMouseActivate = 0x0021;
+    internal const int WmNcHitTest = 0x0084;
+    internal const int WmGetText = 0x000D;
+    internal const int WmGetTextLength = 0x000E;
+    internal const int WmCopy = 0x0301;
+    internal const int WmHotKey = 0x0312;
     internal const int WmLButtonDown = 0x0201;
     internal const int WmLButtonUp = 0x0202;
     internal const int MaNoActivate = 3;
+    internal const uint GaRoot = 2;
+    internal const uint GaParent = 1;
+    internal const uint EmGetSel = 0x00B0;
+    internal const uint EmGetSelText = 0x00C2;
+    internal const uint SciGetSelText = 2161;
+    internal const uint SmtoAbortIfHung = 0x0002;
+    internal const int HtCaption = 2;
+    internal const int HtSize = 4;
+    internal const int HtHScroll = 6;
+    internal const int HtVScroll = 7;
+    internal const int HtLeft = 10;
+    internal const int HtRight = 11;
+    internal const int HtTop = 12;
+    internal const int HtTopLeft = 13;
+    internal const int HtTopRight = 14;
+    internal const int HtBottom = 15;
+    internal const int HtBottomLeft = 16;
+    internal const int HtBottomRight = 17;
+    internal const int HtBorder = 18;
     internal const int GwlExStyle = -20;
     internal const long WsExTransparent = 0x00000020L;
     internal const long WsExToolWindow = 0x00000080L;
@@ -18,6 +43,9 @@ internal static class NativeMethods
     internal const uint SwpNoActivate = 0x0010;
     internal const uint SwpShowWindow = 0x0040;
     internal const uint LlMhfInjected = 0x00000001;
+    internal const uint ModControl = 0x0002;
+    internal const uint ModShift = 0x0004;
+    internal const uint ModNoRepeat = 0x4000;
     internal const int SmCxDrag = 68;
     internal const int SmCyDrag = 69;
     internal static readonly IntPtr HwndTopmost = new(-1);
@@ -31,6 +59,24 @@ internal static class NativeMethods
         internal int Y;
 
         internal readonly ScreenPoint ToScreenPoint() => new(X, Y);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct NativeRect
+    {
+        internal int Left;
+        internal int Top;
+        internal int Right;
+        internal int Bottom;
+
+        internal readonly int Width => Right - Left;
+
+        internal readonly int Height => Bottom - Top;
+
+        internal readonly bool Contains(ScreenPoint point)
+        {
+            return point.X >= Left && point.X < Right && point.Y >= Top && point.Y < Bottom;
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -55,7 +101,6 @@ internal static class NativeMethods
         internal uint Private;
     }
 
-
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern IntPtr SetWindowsHookEx(
         int hookId,
@@ -77,6 +122,14 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PostThreadMessage(uint threadId, uint message, UIntPtr wParam, IntPtr lParam);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool RegisterHotKey(IntPtr windowHandle, int id, uint modifiers, uint virtualKey);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnregisterHotKey(IntPtr windowHandle, int id);
+
     [DllImport("kernel32.dll")]
     internal static extern uint GetCurrentThreadId();
 
@@ -88,6 +141,42 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     internal static extern IntPtr WindowFromPoint(NativePoint point);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll")]
+    internal static extern uint GetClipboardSequenceNumber();
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetAncestor(IntPtr windowHandle, uint flags);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetParent(IntPtr windowHandle);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern int GetClassName(
+        IntPtr windowHandle,
+        StringBuilder className,
+        int maxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr SendMessageTimeout(
+        IntPtr windowHandle,
+        uint message,
+        UIntPtr wParam,
+        IntPtr lParam,
+        uint flags,
+        uint timeoutMilliseconds,
+        out UIntPtr result);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetWindowRect(IntPtr windowHandle, out NativeRect rectangle);
 
     [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(IntPtr windowHandle, out uint processId);
@@ -108,4 +197,5 @@ internal static class NativeMethods
         int width,
         int height,
         uint flags);
+
 }

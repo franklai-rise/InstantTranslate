@@ -14,6 +14,7 @@ public sealed class AppSettingsTests
 
         Assert.DoesNotContain("secret-value", json, StringComparison.Ordinal);
         Assert.DoesNotContain("DeepSeekApiKey", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("PopupOpacity", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -24,5 +25,12 @@ public sealed class AppSettingsTests
         Assert.NotNull(settings);
         Assert.Equal(ThemeCatalog.DefaultThemeId, settings.ColorTheme);
         Assert.Equal(ThemeCatalog.DefaultCustomAccent, settings.CustomAccentColor);
+        Assert.False(settings.StartWithWindows);
+        Assert.False(settings.UseClipboardFallback);
+        Assert.Equal(16.5, settings.DefaultTranslationFontSize);
+        Assert.Equal(8000, settings.MaximumSelectionCharacters);
+        Assert.Equal(UiLanguageCatalog.DefaultLanguageId, settings.UiLanguage);
+        Assert.Equal(TranslationFontCatalog.DefaultEnglishFontFamily, settings.EnglishTranslationFontFamily);
+        Assert.Equal(TranslationFontCatalog.DefaultChineseFontFamily, settings.ChineseTranslationFontFamily);
     }
 }

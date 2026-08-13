@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using InstantTranslate.Settings;
 
 namespace InstantTranslate.Translation;
@@ -20,9 +21,14 @@ internal sealed class TranslationProviderFactory : ITranslationProviderFactory, 
         };
         _httpClient = new HttpClient(handler)
         {
-            Timeout = TimeSpan.FromSeconds(30),
+            // The coordinator owns cancellation and the user-facing timeout.
+            // A second HttpClient timeout used to race that policy and could leave
+            // the popup permanently displaying its loading state.
+            Timeout = Timeout.InfiniteTimeSpan,
         };
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("InstantTranslate/0.1");
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
+            $"InstantTranslate/{version?.ToString(3) ?? "0.0.0"}");
     }
 
     public IStreamingTranslationProvider Create(AppSettings settings)
@@ -39,10 +45,9 @@ internal sealed class TranslationProviderFactory : ITranslationProviderFactory, 
 
     private DeepSeekStreamingProvider CreateDeepSeekProvider(AppSettings settings)
     {
-        if (!Uri.TryCreate(settings.DeepSeekEndpoint, UriKind.Absolute, out var endpoint)
-            || endpoint.Scheme is not ("http" or "https"))
+        if (!TryValidateEndpoint(settings.DeepSeekEndpoint, out var endpoint))
         {
-            throw new TranslationProviderException("DeepSeek Endpoint 无效，请从托盘打开设置。");
+            throw new TranslationProviderException("DeepSeek Endpoint 无效；远程地址必须使用 HTTPS。");
         }
 
         if (string.IsNullOrWhiteSpace(settings.DeepSeekModel))
@@ -53,9 +58,30 @@ internal sealed class TranslationProviderFactory : ITranslationProviderFactory, 
         return new DeepSeekStreamingProvider(
             _httpClient,
             new OpenAiCompatibleProviderOptions(
-                endpoint,
+                endpoint!,
                 settings.DeepSeekModel,
                 settings.DeepSeekApiKey));
+    }
+
+    internal static bool TryValidateEndpoint(string? value, out Uri? endpoint)
+    {
+        endpoint = null;
+        if (!Uri.TryCreate(value?.Trim(), UriKind.Absolute, out var candidate)
+            || candidate.Scheme is not ("http" or "https")
+            || !string.IsNullOrEmpty(candidate.UserInfo)
+            || !string.IsNullOrEmpty(candidate.Fragment)
+            || !string.IsNullOrEmpty(candidate.Query))
+        {
+            return false;
+        }
+
+        if (candidate.Scheme == Uri.UriSchemeHttp && !candidate.IsLoopback)
+        {
+            return false;
+        }
+
+        endpoint = candidate;
+        return true;
     }
 
     public void Dispose() => _httpClient.Dispose();

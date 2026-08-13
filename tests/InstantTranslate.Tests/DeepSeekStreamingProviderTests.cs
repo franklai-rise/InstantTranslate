@@ -30,6 +30,20 @@ public sealed class DeepSeekStreamingProviderTests
     }
 
     [Fact]
+    public void ProviderOptions_ToString_DoesNotExposeApiKey()
+    {
+        var options = new OpenAiCompatibleProviderOptions(
+            new Uri("https://api.deepseek.com"),
+            "deepseek-v4-flash",
+            "highly-secret-key");
+
+        var display = options.ToString();
+
+        Assert.DoesNotContain("highly-secret-key", display, StringComparison.Ordinal);
+        Assert.Contains("deepseek-v4-flash", display, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task TranslateAsync_SendsDeepSeekRequestAndCombinesSseContent()
     {
         const string sse = """
@@ -91,6 +105,88 @@ public sealed class DeepSeekStreamingProviderTests
         Assert.Contains("401", exception.Message, StringComparison.Ordinal);
         Assert.Contains("Invalid API key", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("test-key", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task TranslateAsync_RetriesOneTransientStatusBeforeContent()
+    {
+        var attempt = 0;
+        var handler = new RecordingHandler(_ =>
+        {
+            attempt++;
+            return attempt == 1
+                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                : new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"成功\"}}]}\n\ndata: [DONE]\n\n",
+                        Encoding.UTF8,
+                        "text/event-stream"),
+                };
+        });
+        using var httpClient = new HttpClient(handler);
+        var provider = CreateProvider(httpClient);
+        var text = new StringBuilder();
+
+        await foreach (var chunk in provider.TranslateAsync(
+                           new TranslationRequest("Hello", "英语", "简体中文"),
+                           CancellationToken.None))
+        {
+            text.Append(chunk.TextDelta);
+        }
+
+        Assert.Equal("成功", text.ToString());
+        Assert.Equal(2, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task TranslateAsync_OnSuccessfulJsonResponse_ReportsNonStreamingError()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "{\"error\":{\"message\":\"stream disabled\"}}",
+                Encoding.UTF8,
+                "application/json"),
+        });
+        using var httpClient = new HttpClient(handler);
+        var provider = CreateProvider(httpClient);
+
+        var exception = await Assert.ThrowsAsync<TranslationProviderException>(async () =>
+        {
+            await foreach (var _ in provider.TranslateAsync(
+                               new TranslationRequest("Hello", "英语", "简体中文"),
+                               CancellationToken.None))
+            {
+            }
+        });
+
+        Assert.Contains("非流式响应", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("stream disabled", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TranslateAsync_OnStreamErrorPayload_ReportsApiMessage()
+    {
+        const string sse = "data: {\"error\":{\"message\":\"quota exhausted\"}}\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+        using var httpClient = new HttpClient(handler);
+        var provider = CreateProvider(httpClient);
+
+        var exception = await Assert.ThrowsAsync<TranslationProviderException>(async () =>
+        {
+            await foreach (var _ in provider.TranslateAsync(
+                               new TranslationRequest("Hello", "英语", "简体中文"),
+                               CancellationToken.None))
+            {
+            }
+        });
+
+        Assert.Contains("quota exhausted", exception.Message, StringComparison.Ordinal);
     }
 
     private static DeepSeekStreamingProvider CreateProvider(HttpClient httpClient)
@@ -114,10 +210,13 @@ public sealed class DeepSeekStreamingProviderTests
 
         public string? RequestBody { get; private set; }
 
+        public int RequestCount { get; private set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
+            RequestCount++;
             RequestUri = request.RequestUri;
             AuthorizationScheme = request.Headers.Authorization?.Scheme;
             AuthorizationParameter = request.Headers.Authorization?.Parameter;

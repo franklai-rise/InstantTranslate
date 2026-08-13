@@ -14,6 +14,8 @@ internal interface IPopupPresenter
 
     event Action<long>? PopupClosed;
 
+    event Action<long, bool>? PinStateChanged;
+
     void ShowLoading(long requestId, ScreenPoint anchorPoint);
 
     void ShowTranslation(
@@ -23,7 +25,10 @@ internal interface IPopupPresenter
         string targetLanguage,
         ScreenPoint anchorPoint);
 
-    void FailRequest(long requestId);
+    void FailRequest(long requestId, string? message = null);
+
+    bool IsPointOverPopup(ScreenPoint point);
 
     void HideTransientPopup();
+
 }

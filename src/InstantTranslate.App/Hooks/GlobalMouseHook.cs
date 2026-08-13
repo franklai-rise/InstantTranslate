@@ -10,6 +10,7 @@ internal sealed class GlobalMouseHook : IDisposable
     private readonly ManualResetEventSlim _started = new(false);
     private readonly NativeMethods.LowLevelMouseProc _hookCallback;
     private readonly SelectionGestureDetector _gestureDetector;
+    private readonly NativeWindowDragTracker _windowDragTracker = new();
     private Thread? _hookThread;
     private IntPtr _hookHandle;
     private uint _hookThreadId;
@@ -102,21 +103,22 @@ internal sealed class GlobalMouseHook : IDisposable
                     var point = data.Point.ToScreenPoint();
                     if (message == NativeMethods.WmLButtonDown)
                     {
+                        _windowDragTracker.Press(point);
                         _gestureDetector.Press(point);
-                        ThreadPool.UnsafeQueueUserWorkItem(
-                            static state => state.Owner.MousePressed?.Invoke(state.Point),
-                            (Owner: this, Point: point),
-                            preferLocal: false);
+                        // Keep mouse-down and mouse-up notifications ordered. Both
+                        // subscribers only enqueue work onto the WPF dispatcher;
+                        // dispatching them through separate ThreadPool work items
+                        // could let a stale mouse-down cancel the new translation
+                        // popup after the mouse-up had already started it.
+                        InvokeSafely(MousePressed, point);
                     }
                     else
                     {
+                        var suppressSelection = _windowDragTracker.ReleaseShouldSuppressSelection();
                         var gesture = _gestureDetector.Release(point, DateTimeOffset.UtcNow);
-                        if (gesture is not null)
+                        if (!suppressSelection && gesture is not null)
                         {
-                            ThreadPool.UnsafeQueueUserWorkItem(
-                                static state => state.Owner.SelectionGestureCompleted?.Invoke(state.Gesture),
-                                (Owner: this, Gesture: gesture.Value),
-                                preferLocal: false);
+                            InvokeSafely(SelectionGestureCompleted, gesture.Value);
                         }
                     }
                 }
@@ -124,6 +126,27 @@ internal sealed class GlobalMouseHook : IDisposable
         }
 
         return NativeMethods.CallNextHookEx(_hookHandle, code, wParam, lParam);
+    }
+
+    private static void InvokeSafely<T>(Action<T>? handlers, T value)
+    {
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (var handler in handlers.GetInvocationList().Cast<Action<T>>())
+        {
+            try
+            {
+                handler(value);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"InstantTranslate mouse hook subscriber failed: {exception}");
+            }
+        }
     }
 
     public void Dispose()
@@ -134,6 +157,7 @@ internal sealed class GlobalMouseHook : IDisposable
         }
 
         _disposed = true;
+        _windowDragTracker.Cancel();
         _gestureDetector.Cancel();
         if (_hookThreadId != 0)
         {

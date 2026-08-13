@@ -46,15 +46,23 @@ internal sealed class UiaSelectionReader : ISelectionReader
         {
         }
 
-        try
+        var hitProcessId = TryGetProcessId(hitElement);
+        if (hitProcessId is > 0)
         {
-            focusedElement = AutomationElement.FocusedElement;
-        }
-        catch (ElementNotAvailableException)
-        {
-        }
-        catch (COMException)
-        {
+            try
+            {
+                var candidate = AutomationElement.FocusedElement;
+                if (ShouldIncludeFocusedElement(hitProcessId, TryGetProcessId(candidate)))
+                {
+                    focusedElement = candidate;
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+            catch (COMException)
+            {
+            }
         }
 
         foreach (var root in new[] { hitElement, focusedElement })
@@ -81,6 +89,36 @@ internal sealed class UiaSelectionReader : ISelectionReader
                     break;
                 }
             }
+        }
+    }
+
+    internal static bool ShouldIncludeFocusedElement(int? hitProcessId, int? focusedProcessId)
+    {
+        return hitProcessId is > 0 && hitProcessId == focusedProcessId;
+    }
+
+    private static int? TryGetProcessId(AutomationElement? element)
+    {
+        if (element is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return element.Current.ProcessId;
+        }
+        catch (ElementNotAvailableException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (COMException)
+        {
+            return null;
         }
     }
 

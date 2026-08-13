@@ -29,4 +29,33 @@ public sealed class RequestVersionGateTests
         Assert.True(lease.CancellationToken.IsCancellationRequested);
         Assert.False(gate.IsCurrent(lease.Version));
     }
+
+    [Fact]
+    public void TryDetach_PreservesRequestWhenANewTransientRequestBegins()
+    {
+        using var gate = new RequestVersionGate();
+        var pinned = gate.BeginRequest();
+
+        Assert.True(gate.TryDetach(pinned.Version, out var detachedCancellation));
+        var next = gate.BeginRequest();
+
+        Assert.NotNull(detachedCancellation);
+        Assert.False(pinned.CancellationToken.IsCancellationRequested);
+        Assert.True(gate.IsCurrent(next.Version));
+        detachedCancellation!.Cancel();
+        detachedCancellation.Dispose();
+        Assert.True(pinned.CancellationToken.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void CancelIfCurrent_DoesNotCancelDifferentRequest()
+    {
+        using var gate = new RequestVersionGate();
+        var current = gate.BeginRequest();
+
+        Assert.False(gate.CancelIfCurrent(current.Version + 1));
+        Assert.False(current.CancellationToken.IsCancellationRequested);
+        Assert.True(gate.CancelIfCurrent(current.Version));
+        Assert.True(current.CancellationToken.IsCancellationRequested);
+    }
 }
