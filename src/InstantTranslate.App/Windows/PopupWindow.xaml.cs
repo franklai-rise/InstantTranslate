@@ -25,7 +25,10 @@ internal partial class PopupWindow : Window
     private HwndSource? _hwndSource;
     private IntPtr _windowHandle;
     private string _sourceText = string.Empty;
+    private string _currentTranslationSourceText = string.Empty;
+    private string _currentSourceLanguage = "自动检测";
     private string _translatedText = string.Empty;
+    private string _translationBeforeEdit = string.Empty;
     private string _targetLanguage = LanguageDirectionResolver.Chinese;
     private ScreenPoint _anchorPoint;
     private bool _hasDisplayedTranslation;
@@ -37,6 +40,7 @@ internal partial class PopupWindow : Window
     private ActionMessageKind _actionMessageKind;
     private BodyMessageKind _bodyMessageKind = BodyMessageKind.Translating;
     private string? _customFailureMessage;
+    private bool _isEditingTranslation;
 
     public PopupWindow(
         long requestId,
@@ -63,7 +67,13 @@ internal partial class PopupWindow : Window
 
     public string SourceText => _sourceText;
 
+    public string CurrentTranslationSourceText => _currentTranslationSourceText;
+
+    public string CurrentSourceLanguage => _currentSourceLanguage;
+
     public string LanguageSwitchSourceText => _translatedText;
+
+    public string CurrentTargetLanguage => _targetLanguage;
 
     public ScreenPoint AnchorPoint => _anchorPoint;
 
@@ -79,6 +89,8 @@ internal partial class PopupWindow : Window
 
     public event Action<PopupWindow, string>? RetranslateRequested;
 
+    public event Func<PopupWindow, string, bool>? CorrectionSaveRequested;
+
     public void ApplyUiLanguage(string? uiLanguage)
     {
         _uiLanguage = string.Equals(uiLanguage, "zh-CN", StringComparison.OrdinalIgnoreCase)
@@ -93,6 +105,9 @@ internal partial class PopupWindow : Window
         CopyTranslationButton.Content = Localize("Translation", "译文");
         CopySourceButton.ToolTip = Localize("Copy source", "复制原文");
         CopyTranslationButton.ToolTip = Localize("Copy translation", "复制译文");
+        EditTranslationButton.ToolTip = _isEditingTranslation
+            ? Localize("Save correction (Ctrl+Enter)", "保存修正（Ctrl+Enter）")
+            : Localize("Edit and save correction (Ctrl+E)", "编辑并保存修正（Ctrl+E）");
         PinButton.ToolTip = IsPinned
             ? Localize("Release window", "取消保留")
             : Localize("Keep window", "保留此窗口");
@@ -111,6 +126,11 @@ internal partial class PopupWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(
             CopyTranslationButton,
             Localize("Copy translation", "复制译文"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            EditTranslationButton,
+            _isEditingTranslation
+                ? Localize("Save correction", "保存修正")
+                : Localize("Edit translation", "编辑译文"));
         System.Windows.Automation.AutomationProperties.SetName(
             PinButton,
             IsPinned ? Localize("Release window", "取消保留") : Localize("Keep window", "保留此窗口"));
@@ -190,6 +210,7 @@ internal partial class PopupWindow : Window
 
     public void ShowLoading(ScreenPoint anchorPoint)
     {
+        CancelTranslationEditing(showStatus: false);
         if (_hasDisplayedTranslation)
         {
             PreserveCurrentWindowSize();
@@ -212,6 +233,7 @@ internal partial class PopupWindow : Window
         DirectionButton.IsEnabled = false;
         CopySourceButton.IsEnabled = false;
         CopyTranslationButton.IsEnabled = false;
+        EditTranslationButton.IsEnabled = false;
         if (_hasDisplayedTranslation)
         {
             ShowAt(anchorPoint);
@@ -222,12 +244,15 @@ internal partial class PopupWindow : Window
         string sourceText,
         string translatedText,
         string targetLanguage,
-        ScreenPoint anchorPoint)
+        ScreenPoint anchorPoint,
+        string sourceLanguage = "自动检测")
     {
         if (string.IsNullOrEmpty(_sourceText))
         {
             _sourceText = sourceText;
         }
+        _currentTranslationSourceText = sourceText;
+        _currentSourceLanguage = sourceLanguage;
         _translatedText = translatedText;
         _targetLanguage = targetLanguage;
         _anchorPoint = anchorPoint;
@@ -240,12 +265,21 @@ internal partial class PopupWindow : Window
         DirectionButton.IsEnabled = true;
         CopySourceButton.IsEnabled = true;
         CopyTranslationButton.IsEnabled = true;
+        EditTranslationButton.IsEnabled = false;
         TranslationRichTextBox.Visibility = Visibility.Visible;
         HideActionStatus();
         _hasDisplayedTranslation = true;
         if (isFirstTranslationUpdate || !IsVisible)
         {
             ShowAt(anchorPoint);
+        }
+    }
+
+    public void MarkTranslationComplete()
+    {
+        if (HasTranslation && !_isEditingTranslation)
+        {
+            EditTranslationButton.IsEnabled = true;
         }
     }
 
@@ -262,6 +296,7 @@ internal partial class PopupWindow : Window
         DirectionButton.IsEnabled = true;
         CopySourceButton.IsEnabled = true;
         CopyTranslationButton.IsEnabled = true;
+        EditTranslationButton.IsEnabled = true;
         TranslationRichTextBox.Visibility = Visibility.Visible;
         ShowActionStatus(ActionMessageKind.TranslationFailedPreserved);
     }
@@ -278,6 +313,7 @@ internal partial class PopupWindow : Window
         DirectionButton.IsEnabled = false;
         CopySourceButton.IsEnabled = false;
         CopyTranslationButton.IsEnabled = false;
+        EditTranslationButton.IsEnabled = false;
         LoadingPanel.Visibility = Visibility.Visible;
         ShowAt(_anchorPoint);
     }
@@ -297,6 +333,8 @@ internal partial class PopupWindow : Window
         _translationParagraph = null;
         _renderedTranslation = string.Empty;
         _sourceText = string.Empty;
+        _currentTranslationSourceText = string.Empty;
+        _currentSourceLanguage = "自动检测";
         _translatedText = string.Empty;
         _windowHandle = IntPtr.Zero;
         base.OnClosed(e);
@@ -394,6 +432,17 @@ internal partial class PopupWindow : Window
         await CopyWithFeedbackAsync(CopyTranslationButton, textToCopy);
     }
 
+    private void EditTranslationButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isEditingTranslation)
+        {
+            TrySaveTranslationCorrection();
+            return;
+        }
+
+        BeginTranslationEditing();
+    }
+
     private void DirectionButton_Click(object sender, RoutedEventArgs e)
     {
         if (_sourceText.Length == 0)
@@ -441,6 +490,145 @@ internal partial class PopupWindow : Window
     private void CloseButton_Click(object sender, RoutedEventArgs e)
     {
         Close();
+    }
+
+    private void PopupWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        var hasControl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+        if (_isEditingTranslation && hasControl && e.Key == Key.Enter)
+        {
+            TrySaveTranslationCorrection();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.Escape)
+        {
+            if (_isEditingTranslation)
+            {
+                CancelTranslationEditing(showStatus: false);
+            }
+            else
+            {
+                Close();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
+        if (!hasControl)
+        {
+            return;
+        }
+
+        if (e.Key == Key.E && !_isEditingTranslation && EditTranslationButton.IsEnabled)
+        {
+            BeginTranslationEditing();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.P)
+        {
+            PinButton_Click(PinButton, new RoutedEventArgs());
+            e.Handled = true;
+        }
+        else if (e.Key is Key.OemPlus or Key.Add)
+        {
+            FontSizeSlider.Value = Math.Min(FontSizeSlider.Maximum, FontSizeSlider.Value + 0.5);
+            e.Handled = true;
+        }
+        else if (e.Key is Key.OemMinus or Key.Subtract)
+        {
+            FontSizeSlider.Value = Math.Max(FontSizeSlider.Minimum, FontSizeSlider.Value - 0.5);
+            e.Handled = true;
+        }
+    }
+
+    private void BeginTranslationEditing()
+    {
+        if (!HasTranslation || _isEditingTranslation || !EditTranslationButton.IsEnabled)
+        {
+            return;
+        }
+
+        _translationBeforeEdit = _translatedText;
+        _isEditingTranslation = true;
+        TranslationRichTextBox.IsReadOnly = false;
+        TranslationRichTextBox.IsUndoEnabled = true;
+        DirectionButton.IsEnabled = false;
+        EditTranslationButton.Tag = "Selected";
+        EditTranslationIcon.Visibility = Visibility.Collapsed;
+        SaveCorrectionIcon.Visibility = Visibility.Visible;
+        ApplyUiLanguage(_uiLanguage);
+        ShowActionStatus(ActionMessageKind.CorrectionEditing);
+        Activate();
+        TranslationRichTextBox.Focus();
+        TranslationRichTextBox.CaretPosition = TranslationRichTextBox.Document.ContentEnd;
+    }
+
+    private void TrySaveTranslationCorrection()
+    {
+        if (!_isEditingTranslation)
+        {
+            return;
+        }
+
+        var range = new TextRange(
+            TranslationRichTextBox.Document.ContentStart,
+            TranslationRichTextBox.Document.ContentEnd);
+        var correctedTranslation = range.Text.TrimEnd('\r', '\n');
+        if (string.IsNullOrWhiteSpace(correctedTranslation))
+        {
+            ShowActionStatus(ActionMessageKind.CorrectionSaveFailed);
+            return;
+        }
+
+        if (string.Equals(correctedTranslation, _translationBeforeEdit, StringComparison.Ordinal))
+        {
+            CancelTranslationEditing(showStatus: false);
+            return;
+        }
+
+        if (CorrectionSaveRequested?.Invoke(this, correctedTranslation) != true)
+        {
+            ShowActionStatus(ActionMessageKind.CorrectionSaveFailed);
+            return;
+        }
+
+        FinishTranslationEditing(correctedTranslation);
+        ShowActionStatus(ActionMessageKind.CorrectionSaved);
+    }
+
+    private void CancelTranslationEditing(bool showStatus)
+    {
+        if (!_isEditingTranslation)
+        {
+            return;
+        }
+
+        var restoredTranslation = _translationBeforeEdit;
+        FinishTranslationEditing(restoredTranslation);
+        if (!showStatus)
+        {
+            HideActionStatus();
+        }
+    }
+
+    private void FinishTranslationEditing(string translation)
+    {
+        _isEditingTranslation = false;
+        _translationBeforeEdit = string.Empty;
+        TranslationRichTextBox.IsReadOnly = true;
+        TranslationRichTextBox.IsUndoEnabled = false;
+        DirectionButton.IsEnabled = true;
+        EditTranslationButton.Tag = null;
+        EditTranslationIcon.Visibility = Visibility.Visible;
+        SaveCorrectionIcon.Visibility = Visibility.Collapsed;
+        _translatedText = translation;
+        _translationParagraph = null;
+        _renderedTranslation = string.Empty;
+        SetTranslationText(translation);
+        ApplyUiLanguage(_uiLanguage);
     }
 
     private void EnablePinnedResize()
@@ -643,6 +831,15 @@ internal partial class PopupWindow : Window
             ActionMessageKind.TranslationFailedPreserved => Localize(
                 "Translation failed · Previous result kept",
                 "翻译失败 · 已保留原译文"),
+            ActionMessageKind.CorrectionEditing => Localize(
+                "Editing · Ctrl+Enter to save · Esc to cancel",
+                "正在编辑 · Ctrl+Enter 保存 · Esc 取消"),
+            ActionMessageKind.CorrectionSaved => Localize(
+                "✓ Saved to translation memory",
+                "✓ 已保存到翻译记忆"),
+            ActionMessageKind.CorrectionSaveFailed => Localize(
+                "Could not save correction",
+                "无法保存修正译文"),
             _ => string.Empty,
         };
     }
@@ -840,6 +1037,9 @@ internal partial class PopupWindow : Window
         CopySucceeded,
         CopyFailed,
         TranslationFailedPreserved,
+        CorrectionEditing,
+        CorrectionSaved,
+        CorrectionSaveFailed,
     }
 
     private enum BodyMessageKind

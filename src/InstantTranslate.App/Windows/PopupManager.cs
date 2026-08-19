@@ -28,6 +28,8 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
 
     public event Action<long, bool>? PinStateChanged;
 
+    public event Func<PopupTranslationCorrection, bool>? TranslationCorrectionRequested;
+
     public void ShowLoading(long requestId, ScreenPoint anchorPoint)
     {
         var window = GetOrCreateWindow(requestId);
@@ -45,7 +47,8 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
         string sourceText,
         string translatedText,
         string targetLanguage,
-        ScreenPoint anchorPoint)
+        ScreenPoint anchorPoint,
+        string sourceLanguage = "自动检测")
     {
         var window = GetOrCreateWindow(requestId);
         if (!window.IsPinned)
@@ -54,7 +57,12 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
             _transientRequestId = requestId;
         }
 
-        window.ShowTranslation(sourceText, translatedText, targetLanguage, anchorPoint);
+        window.ShowTranslation(
+            sourceText,
+            translatedText,
+            targetLanguage,
+            anchorPoint,
+            sourceLanguage);
     }
 
     public void FailRequest(long requestId, string? message = null)
@@ -71,6 +79,14 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
         else
         {
             window.ShowFailure(message);
+        }
+    }
+
+    public void CompleteRequest(long requestId)
+    {
+        if (_windows.TryGetValue(requestId, out var window))
+        {
+            window.MarkTranslationComplete();
         }
     }
 
@@ -141,6 +157,7 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
             appearance.UiLanguage);
         window.PinStateChanged += OnPinStateChanged;
         window.RetranslateRequested += OnRetranslateRequested;
+        window.CorrectionSaveRequested += OnCorrectionSaveRequested;
         window.Closed += OnWindowClosed;
         _windows.Add(requestId, window);
         return window;
@@ -185,8 +202,19 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
         RetranslateRequested?.Invoke(new PopupRetranslateRequest(
             window.RequestId,
             window.LanguageSwitchSourceText,
+            window.CurrentTargetLanguage,
             targetLanguage,
             window.AnchorPoint));
+    }
+
+    private bool OnCorrectionSaveRequested(PopupWindow window, string correctedTranslation)
+    {
+        return TranslationCorrectionRequested?.Invoke(new PopupTranslationCorrection(
+            window.RequestId,
+            window.CurrentTranslationSourceText,
+            correctedTranslation,
+            window.CurrentSourceLanguage,
+            window.CurrentTargetLanguage)) == true;
     }
 
     private void OnWindowClosed(object? sender, EventArgs e)
@@ -198,6 +226,7 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
 
         window.PinStateChanged -= OnPinStateChanged;
         window.RetranslateRequested -= OnRetranslateRequested;
+        window.CorrectionSaveRequested -= OnCorrectionSaveRequested;
         window.Closed -= OnWindowClosed;
         _windows.Remove(window.RequestId);
         if (_transientRequestId == window.RequestId)

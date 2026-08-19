@@ -105,6 +105,9 @@ internal sealed class SettingsStore
             TranslationMode = TranslationPreferenceCatalog.NormalizeMode(value.TranslationMode),
             TranslationTone = TranslationPreferenceCatalog.NormalizeTone(value.TranslationTone),
             PersonalGlossary = value.PersonalGlossary?.Trim() ?? string.Empty,
+            DefaultTranslationFontSize = double.IsFinite(value.DefaultTranslationFontSize)
+                ? Math.Clamp(value.DefaultTranslationFontSize, 12, 34)
+                : AppSettings.Default.DefaultTranslationFontSize,
             EnglishTranslationFontFamily = TranslationFontCatalog.NormalizeEnglish(
                 value.EnglishTranslationFontFamily),
             ChineseTranslationFontFamily = TranslationFontCatalog.NormalizeChinese(

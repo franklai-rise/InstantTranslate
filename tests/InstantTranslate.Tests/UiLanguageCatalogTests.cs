@@ -30,6 +30,7 @@ public sealed class UiLanguageCatalogTests
     [InlineData("DeepSeek API 返回 401：Invalid API key", "DeepSeek API returned 401: Invalid API key")]
     [InlineData("DeepSeek 在 20 秒内未返回首段译文，请检查网络后重试。", "DeepSeek did not return translated text within 20 seconds. Check the network and try again.")]
     [InlineData("DeepSeek 流式响应停顿超过 15 秒，已取消。", "The DeepSeek stream stopped responding for 15 seconds and was canceled.")]
+    [InlineData("DeepSeek 因连续网络故障暂时暂停，请在 5 秒后重试。", "DeepSeek is temporarily paused after repeated network failures. Wait a few seconds and try again.")]
     [InlineData("Plain English API error", "Plain English API error")]
     public void LocalizeProviderError_EnglishUi_NeverLeaksChinesePrompts(string input, string expected)
     {

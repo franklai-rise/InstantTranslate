@@ -10,14 +10,24 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 
 ## 15 秒开始使用
 
-1. 下载并解压 `InstantTranslate-v0.4.1-win-x64.zip`。
+1. 下载并解压 `InstantTranslate-v0.5.0-win-x64.zip`。
 2. 运行 `InstantTranslate.exe`；首次启动会打开设置。
 3. 填写 DeepSeek API Key，点击“Test connection”（切换中文后为“测试连接”），成功后保存。
 4. 在记事本、浏览器或文档中用鼠标拖选文字。
 
 程序常驻系统托盘。再次双击 EXE 不会重复安装鼠标钩子，而会唤起已有实例的设置页。
 
-## v0.4 亮点
+## v0.5 亮点
+
+- 相同配置、相同文本的并发请求会自动合并：第一个窗口继续流式显示，后续窗口复用同一结果，减少重复 API 调用和费用。
+- DeepSeek 网络层增加有上限的退避重试；连续短暂故障会触发 6 秒冷却，避免断网或 VPN 切换时反复轰炸接口，恢复后自动继续。
+- 托盘新增“Copy performance diagnostics / 复制性能诊断”，仅输出最近 100 次请求的读取、排队、首段译文和总耗时统计，不包含原文、译文、API Key、Endpoint 或文件路径。
+- 浮窗新增“编辑并保存修正”：只有主动编辑并保存的译文才进入翻译记忆；文件使用 Windows DPAPI 为当前账户加密，精确相同文本可直接命中，最多 3 组相关示例可辅助后续翻译。
+- 设置页可查看加密修正数量并一键清空。默认翻译仍不写入磁盘，退出时普通内存缓存仍会清空。
+- 自动跟随 Windows 高对比度模式；浮窗支持 `Ctrl+E` 编辑、`Ctrl+Enter` 保存、`Esc` 取消、`Ctrl+P` 保留、`Ctrl++ / Ctrl+-` 调整字号，默认字号上限提升到 34。
+- 发布脚本支持可选 Authenticode 证书签名和时间戳校验；不提供证书时仍生成与以前一致的未签名 ZIP。
+
+## 现有体验
 
 - 程序界面默认使用英文；设置页右上角的“中文 / English”按钮可以即时切换，保存后同步应用到浮窗提示、托盘菜单和通知。
 - 非译文界面内嵌使用 Source Sans Pro，无需朋友的电脑另行安装字体。
@@ -63,6 +73,9 @@ Windows 应用取词能力并不统一。InstantTranslate 按以下顺序尝试�
 - `Aa`：按需展开字号滑杆，避免不调字号时持续占用工具条空间。
 - 图钉：保留窗口。保留后可拖动文字外区域，并从任意边缘或角落调整尺寸；继续划词会创建另一临时浮窗，正在生成的保留结果也不会被新选词截断。
 - ×：立即关闭当前浮窗。
+- 铅笔 / 对勾：编辑译文并主动保存修正；保存成功后，同方向的相同原文会直接使用修正版。
+
+键盘操作：`Ctrl+E` 编辑译文，`Ctrl+Enter` 保存修正，`Esc` 取消编辑，`Ctrl+P` 保留或释放窗口，`Ctrl++ / Ctrl+-` 调整字号，`Ctrl+C` 复制当前选区。
 
 译文显示后，无论是否保留，都可以从任意边缘或角落调整尺寸；长文本或大字号超出当前高度时会在正文内部滚动。取消保留不会立即关闭窗口；下一次点击其他区域才按临时窗口规则收起。
 
@@ -85,6 +98,7 @@ API Key 由密码框录入并保存在 Windows 凭据管理器中，不写入设
 - 翻译剪贴板（`Ctrl+Shift+T`）
 - 启用或暂停自动划词
 - 设置
+- 复制性能诊断（只含耗时与结果状态，不含任何翻译文本）
 - 关于与版本
 - 退出
 
@@ -94,8 +108,10 @@ API Key 由密码框录入并保存在 Windows 凭据管理器中，不写入设
 
 - 使用 DeepSeek Provider 时，原文会发送到你配置的 Endpoint；Mock Provider 完全离线。
 - “使用周围语境”默认关闭；开启后，选区所在段落会作为只读参考一并发送。个人术语库保存在本机设置中，请求时仅发送当前选区命中的术语对。
-- 默认不持久化原文、译文或运行日志。
+- 默认不持久化原文、译文或运行日志。只有点击浮窗编辑按钮并保存的修正，才会进入翻译记忆。
+- 翻译记忆最多保存 200 条，使用 Windows DPAPI 绑定当前 Windows 账户加密。精确命中在本机直接返回；相关请求最多向 Provider 发送 3 组你主动保存的示例。设置页可永久清空。
 - 缓存只存在于当前进程内，默认最多 128 条、约 100 万字符预算、20 分钟有效；键中只保留原文指纹而非原文全文，退出即清空。
+- 性能诊断只在内存保留最近 100 组数值和状态，不采集原文、译文、凭据、Endpoint 或路径；仅在你选择托盘命令时复制到剪贴板。
 - API Key 保存在 Windows Credential Manager 的 `InstantTranslate/DeepSeekApiKey`。
 - 自动取词默认不注入键盘、不修改剪贴板；终端应用始终禁用自动剪贴板回退。若确实需要兼容自绘应用，可在设置中主动打开兼容模式。
 - 跨窗口或跨进程拖动会被拒绝，UI Automation 焦点候选也必须属于鼠标命中的同一进程。
@@ -127,18 +143,24 @@ dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --co
 ## 打包
 
 ```powershell
-.\scripts\Publish.ps1 -Version 0.4.1
+.\scripts\Publish.ps1 -Version 0.5.0
 ```
 
 脚本会依次恢复依赖、Release 构建、运行全部测试、发布自包含单文件程序、执行烟雾测试、生成 ZIP 和 SHA-256 校验文件。结果位于 `artifacts/release/`。
 
-当前版本没有商业代码签名；在部分电脑上首次运行可能出现 Windows SmartScreen“未知发布者”提示。
+如已在 Windows 证书存储中安装带私钥的代码签名证书，可选签名并验证成品：
+
+```powershell
+.\scripts\Publish.ps1 -Version 0.5.0 -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
+```
+
+也可使用 `-CertificateStoreLocation LocalMachine`、`-TimestampUrl` 或 `-SignToolPath` 指定企业环境。没有证书时成品仍为未签名程序，在部分电脑上首次运行可能出现 Windows SmartScreen“未知发布者”提示。Microsoft Store / MSIX 发布仍需要开发者账户及与该账户匹配的包身份，脚本不会伪造这些信息。
 
 ## 已知限制
 
 - 目前主要响应鼠标拖选；双击选词和纯键盘选区不会自动触发。
 - 自绘画布、部分 Electron/微信版本和高权限窗口可能无法通过无剪贴板方式自动读取；默认请使用复制后 `Ctrl+Shift+T`，或在设置中明确打开兼容性剪贴板回退。
-- 尚未加入 OCR、安装器、自动更新和 ARM64 包。
+- 本项目聚焦即时划词，不提供 OCR 截图翻译或 PDF/DOCX 整篇文档翻译；当前也没有安装器、自动更新和 ARM64 包。
 - 个别精简版 Windows 可能没有黑体、宋体或楷体；WPF 会使用系统可用字体回退，Source Sans Pro 界面字体则已随程序内嵌。
 
 ## 第三方字体
@@ -149,8 +171,8 @@ dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --co
 
 - `Hooks/`：全局鼠标钩子、窗口拖动抑制和全局快捷键。
 - `Selection/`：UI Automation、原生控件取词、可选剪贴板回退和文本规范化。
-- `Translation/`：DeepSeek 流式 Provider、语言方向、内存缓存与更新节流。
-- `Services/`：单实例、请求会话、托盘和端到端协调。
+- `Translation/`：DeepSeek 流式 Provider、语言方向、内存缓存、加密翻译记忆、并发合并与网络断路保护。
+- `Services/`：单实例、请求会话、无文本性能诊断、托盘和端到端协调。
 - `Settings/`：设置、主题、开机启动与 Windows 凭据存储。
 - `Windows/`：设置窗口和无焦点译文浮窗。
 

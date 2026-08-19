@@ -11,6 +11,7 @@ internal sealed class TrayIconManager : IDisposable
     private readonly Forms.ToolStripMenuItem _enabledMenuItem;
     private readonly Forms.ToolStripMenuItem _translateClipboardMenuItem;
     private readonly Forms.ToolStripMenuItem _settingsMenuItem;
+    private readonly Forms.ToolStripMenuItem _diagnosticsMenuItem;
     private readonly Forms.ToolStripMenuItem _aboutMenuItem;
     private readonly Forms.ToolStripMenuItem _exitMenuItem;
     private readonly Icon _applicationIcon;
@@ -43,6 +44,8 @@ internal sealed class TrayIconManager : IDisposable
         _translateClipboardMenuItem.Click += (_, _) => TranslateClipboardRequested?.Invoke();
         _settingsMenuItem = new Forms.ToolStripMenuItem();
         _settingsMenuItem.Click += (_, _) => SettingsRequested?.Invoke();
+        _diagnosticsMenuItem = new Forms.ToolStripMenuItem();
+        _diagnosticsMenuItem.Click += (_, _) => DiagnosticsRequested?.Invoke();
         _aboutMenuItem = new Forms.ToolStripMenuItem();
         _aboutMenuItem.Click += (_, _) => AboutRequested?.Invoke();
         _exitMenuItem = new Forms.ToolStripMenuItem();
@@ -55,6 +58,7 @@ internal sealed class TrayIconManager : IDisposable
         contextMenu.Items.Add(_enabledMenuItem);
         contextMenu.Items.Add(new Forms.ToolStripSeparator());
         contextMenu.Items.Add(_settingsMenuItem);
+        contextMenu.Items.Add(_diagnosticsMenuItem);
         contextMenu.Items.Add(_aboutMenuItem);
         contextMenu.Items.Add(new Forms.ToolStripSeparator());
         contextMenu.Items.Add(_exitMenuItem);
@@ -79,6 +83,8 @@ internal sealed class TrayIconManager : IDisposable
 
     public event Action? TranslateClipboardRequested;
 
+    public event Action? DiagnosticsRequested;
+
     public event Action? AboutRequested;
 
     public void ApplyUiLanguage(string? uiLanguage)
@@ -87,6 +93,7 @@ internal sealed class TrayIconManager : IDisposable
         _enabledMenuItem.Text = L("Enable selection translation", "启用划词翻译");
         _translateClipboardMenuItem.Text = L("Translate clipboard (Ctrl+Shift+T)", "翻译剪贴板（Ctrl+Shift+T）");
         _settingsMenuItem.Text = L("Settings…", "设置…");
+        _diagnosticsMenuItem.Text = L("Copy performance diagnostics", "复制性能诊断");
         _aboutMenuItem.Text = L("About InstantTranslate", "关于 InstantTranslate");
         _exitMenuItem.Text = L("Exit", "退出");
         UpdateStatus(_enabledMenuItem.Checked);

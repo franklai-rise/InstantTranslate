@@ -18,6 +18,8 @@
         <SolidColorBrush x:Key="DangerBrush" Color="#B42318" />
         <SolidColorBrush x:Key="AccentBrush" Color="#2563EB" />
         <SolidColorBrush x:Key="AccentLightBrush" Color="#76A0F2" />
+        <SolidColorBrush x:Key="AccentTextBrush" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="SwitchKnobBrush" Color="#FFFFFF" />
         <SolidColorBrush x:Key="PopupBackgroundBrush" Color="#F7F7F8" />
         <SolidColorBrush x:Key="PopupBorderBrush" Color="#E2E2E5" />
         <SolidColorBrush x:Key="PopupButtonBrush" Color="#EEEEF0" />

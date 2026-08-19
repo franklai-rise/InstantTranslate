@@ -156,7 +156,7 @@
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource AccentBrush}" />
-                                <Setter Property="Foreground" Value="White" />
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -279,7 +279,7 @@
                                      Height="18"
                                      Margin="3"
                                      HorizontalAlignment="Left"
-                                     Fill="White" />
+                                     Fill="{DynamicResource SwitchKnobBrush}" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
@@ -343,7 +343,7 @@
 
         <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
             <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Template">
@@ -724,6 +724,33 @@
                                        Style="{StaticResource SupportingTextStyle}"
                                        Tag="loc:PersonalGlossaryDescription"
                                        Text="One term per line: source =&gt; preferred translation. Stored only on this device." />
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                               Tag="loc:TranslationMemory"
+                                               Text="Saved translation memory" />
+                                    <TextBlock x:Name="TranslationMemoryStatusText"
+                                               Margin="0,3,16,0"
+                                               Style="{StaticResource SupportingTextStyle}"
+                                               Text="No saved corrections" />
+                                </StackPanel>
+                                <Button x:Name="ClearTranslationMemoryButton"
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        Content="Clear"
+                                        Tag="loc:ClearTranslationMemory"
+                                        Style="{StaticResource SecondaryButtonStyle}"
+                                        Click="ClearTranslationMemoryButton_Click" />
+                            </Grid>
+                            <TextBlock Margin="0,7,0,0"
+                                       Style="{StaticResource SupportingTextStyle}"
+                                       Tag="loc:TranslationMemoryDescription"
+                                       Text="Only corrections you save from the popup are encrypted for this Windows account. Up to 3 relevant pairs may guide future requests."
+                                       TextWrapping="Wrap" />
                         </StackPanel>
 
                         <Grid Margin="0,17,0,0">
@@ -818,7 +845,7 @@
                             <Slider x:Name="DefaultFontSizeSlider"
                                     Grid.Column="1"
                                     Minimum="12"
-                                    Maximum="30"
+                                    Maximum="34"
                                     Value="16.5"
                                     SmallChange="0.5"
                                     LargeChange="2"

@@ -9,6 +9,7 @@ internal sealed class TranslationProviderFactory : ITranslationProviderFactory, 
 {
     private readonly MockTranslationProvider _mockProvider = new();
     private readonly HttpClient _httpClient;
+    private readonly ProviderCircuitBreaker _deepSeekCircuitBreaker = new();
 
     public TranslationProviderFactory()
     {
@@ -46,28 +47,36 @@ internal sealed class TranslationProviderFactory : ITranslationProviderFactory, 
         {
             "mock" => _mockProvider,
             "deepseek" => CreateDeepSeekProvider(settings),
-            _ => throw new TranslationProviderException($"未知翻译 Provider：{settings.ProviderId}"),
+            _ => throw new TranslationProviderException(
+                $"未知翻译 Provider：{settings.ProviderId}",
+                TranslationFailureKind.Configuration),
         };
     }
 
-    private DeepSeekStreamingProvider CreateDeepSeekProvider(AppSettings settings)
+    private IStreamingTranslationProvider CreateDeepSeekProvider(AppSettings settings)
     {
         if (!TryValidateEndpoint(settings.DeepSeekEndpoint, out var endpoint))
         {
-            throw new TranslationProviderException("DeepSeek Endpoint 无效；远程地址必须使用 HTTPS。");
+            throw new TranslationProviderException(
+                "DeepSeek Endpoint 无效；远程地址必须使用 HTTPS。",
+                TranslationFailureKind.Configuration);
         }
 
         if (string.IsNullOrWhiteSpace(settings.DeepSeekModel))
         {
-            throw new TranslationProviderException("尚未配置 DeepSeek Model，请从托盘打开设置。");
+            throw new TranslationProviderException(
+                "尚未配置 DeepSeek Model，请从托盘打开设置。",
+                TranslationFailureKind.Configuration);
         }
 
-        return new DeepSeekStreamingProvider(
-            _httpClient,
-            new OpenAiCompatibleProviderOptions(
-                endpoint!,
-                settings.DeepSeekModel,
-                settings.DeepSeekApiKey));
+        return new CircuitBreakingTranslationProvider(
+            new DeepSeekStreamingProvider(
+                _httpClient,
+                new OpenAiCompatibleProviderOptions(
+                    endpoint!,
+                    settings.DeepSeekModel,
+                    settings.DeepSeekApiKey)),
+            _deepSeekCircuitBreaker);
     }
 
     internal static bool TryValidateEndpoint(string? value, out Uri? endpoint)

@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Threading;
 using InstantTranslate.Hooks;
@@ -20,6 +21,8 @@ public partial class App : System.Windows.Application
 {
     private readonly SettingsStore _settingsStore = new(new WindowsCredentialStore());
     private readonly StartupRegistration _startupRegistration = new();
+    private readonly TranslationPerformanceMonitor _performanceMonitor = new();
+    private readonly TranslationMemoryStore _translationMemoryStore = new();
     private volatile AppSettings _settings = AppSettings.Default;
     private GlobalMouseHook? _mouseHook;
     private GlobalHotkeyManager? _hotkeyManager;
@@ -31,6 +34,7 @@ public partial class App : System.Windows.Application
     private SettingsWindow? _settingsWindow;
     private DispatcherTimer? _smokeTestTimer;
     private bool _isExiting;
+    private bool _isSystemParametersSubscribed;
     private int _exitCode;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -57,6 +61,8 @@ public partial class App : System.Windows.Application
 
         _settings = _settingsStore.Load();
         ThemeManager.Apply(_settings);
+        SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
+        _isSystemParametersSubscribed = true;
 
         // Visual review modes render only our own WPF windows. They deliberately
         // skip global hooks, hotkeys, tray integration, and startup registration.
@@ -93,13 +99,16 @@ public partial class App : System.Windows.Application
                 _translationProviderFactory,
                 _popupManager,
                 Dispatcher,
-                () => _settings);
+                () => _settings,
+                _performanceMonitor,
+                _translationMemoryStore);
             _coordinator.TranslationFailed += OnTranslationFailed;
 
             _trayIcon = new TrayIconManager(_settings.IsEnabled, _settings.UiLanguage);
             _trayIcon.SettingsRequested += ShowSettings;
             _trayIcon.EnabledChanged += SetEnabled;
             _trayIcon.TranslateClipboardRequested += TranslateClipboard;
+            _trayIcon.DiagnosticsRequested += CopyPerformanceDiagnostics;
             _trayIcon.AboutRequested += ShowAbout;
             _trayIcon.ExitRequested += ExitApplication;
 
@@ -210,6 +219,7 @@ public partial class App : System.Windows.Application
                 "Simplicity is not about removing capability; it is about making every action feel direct and effortless.",
                 LanguageDirectionResolver.English,
                 anchor);
+            _popupManager?.CompleteRequest(requestId);
             await Task.Delay(350);
             var window = _popupManager?.GetWindowForVisualTest(requestId)
                 ?? throw new InvalidOperationException("无法创建浮窗预览。");
@@ -240,6 +250,7 @@ public partial class App : System.Windows.Application
                 longTranslation,
                 LanguageDirectionResolver.Chinese,
                 anchor);
+            _popupManager.CompleteRequest(requestId);
             window.ConfigureViewportForVisualTest(width: 560, height: 260, fontSize: 30);
             await Task.Delay(220);
             if (!window.HasVerticalOverflowForVisualTest())
@@ -357,7 +368,10 @@ public partial class App : System.Windows.Application
                 return;
             }
 
-            var settingsWindow = new SettingsWindow(_settings);
+            var settingsWindow = new SettingsWindow(
+                _settings,
+                () => _translationMemoryStore.Count,
+                _translationMemoryStore.Clear);
             _settingsWindow = settingsWindow;
             bool? result;
             try
@@ -452,12 +466,37 @@ public partial class App : System.Windows.Application
                 WpfMessageBox.Show(
                     $"InstantTranslate {version?.Major ?? 0}.{version?.Minor ?? 0}.{version?.Build ?? 0}\n\n"
                     + L(
-                        "Translations are powered by DeepSeek. Source text and translations are not saved by default; repeated-translation cache stays in memory and is cleared on exit.",
-                        "由 DeepSeek 提供翻译。默认不保存原文和译文；重复翻译缓存仅存在于内存，退出后即清空。"),
+                        "Translations are powered by DeepSeek. Source text and translations are not saved by default. Only corrections you explicitly save are encrypted for your Windows account and can be cleared in Settings.",
+                        "由 DeepSeek 提供翻译。默认不保存原文和译文；只有你主动保存的修正译文会为当前 Windows 账户加密，并可在设置中清除。"),
                     L("About InstantTranslate", "关于 InstantTranslate"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
             });
+    }
+
+    private void CopyPerformanceDiagnostics()
+    {
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                try
+                {
+                    var useChinese = _settings.UiLanguage == UiLanguageCatalog.SimplifiedChineseLanguageId;
+                    WpfClipboard.SetText(_performanceMonitor.CreateReport(useChinese));
+                    _trayIcon?.ShowInfo(
+                        "InstantTranslate",
+                        L(
+                            "Performance diagnostics copied. No translated text or credentials are included.",
+                            "性能诊断已复制，不包含原文、译文或凭据。"));
+                }
+                catch (ExternalException)
+                {
+                    _trayIcon?.ShowError(L(
+                        "The clipboard is temporarily unavailable. Try again.",
+                        "剪贴板暂时不可用，请稍后重试。"));
+                }
+            },
+            DispatcherPriority.Send);
     }
 
     private void TryApplyStartupSetting()
@@ -534,8 +573,30 @@ public partial class App : System.Windows.Application
             : english;
     }
 
+    private void SystemParameters_StaticPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!string.Equals(e.PropertyName, nameof(SystemParameters.HighContrast), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                ThemeManager.Apply(_settings);
+                _popupManager?.ApplyAppearanceToOpenWindows();
+            },
+            DispatcherPriority.Normal);
+    }
+
     private void DisposeServices()
     {
+        if (_isSystemParametersSubscribed)
+        {
+            SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
+            _isSystemParametersSubscribed = false;
+        }
+
         if (_smokeTestTimer is not null)
         {
             _smokeTestTimer.Stop();
@@ -568,6 +629,7 @@ public partial class App : System.Windows.Application
             _trayIcon.SettingsRequested -= ShowSettings;
             _trayIcon.EnabledChanged -= SetEnabled;
             _trayIcon.TranslateClipboardRequested -= TranslateClipboard;
+            _trayIcon.DiagnosticsRequested -= CopyPerformanceDiagnostics;
             _trayIcon.AboutRequested -= ShowAbout;
             _trayIcon.ExitRequested -= ExitApplication;
             _trayIcon.Dispose();

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0 - 2026-08-19
+
+### Added
+
+- Added process-local performance diagnostics for selection reads, queueing, first content, total latency, cache hits, and coalesced requests; reports deliberately exclude source text, translations, credentials, endpoints, and paths.
+- Added duplicate in-flight request coalescing so identical concurrent translations share one provider request while the owner continues to stream.
+- Added explicit correction editing in the popup and a DPAPI-protected translation memory containing only corrections the user chooses to save.
+- Added exact saved-correction hits plus up to three bounded relevant examples for future requests, with a clear-all control in Settings.
+- Added automatic Windows high-contrast palette handling and popup keyboard commands for correction editing, pinning, copying, and text sizing.
+- Added optional Authenticode signing and signature verification to the release script without changing the unsigned default.
+
+### Changed
+
+- Added bounded exponential-jitter retries and a short circuit-breaker cooldown for transient DeepSeek network, timeout, rate-limit, and server failures.
+- Increased the configurable translation font maximum from 30 to 34 and reduced repeated allocation during relevant-example matching.
+- Classified provider errors explicitly so configuration and authentication failures do not trigger transient-failure recovery.
+
+### Security
+
+- Kept ordinary translations ephemeral; persistent memory is created only after an explicit correction save and is encrypted for the current Windows account.
+- Limited saved memory to 200 entries and relevant provider examples to three pairs within a 2,400-character budget.
+
 ## 0.4.1 - 2026-08-19
 
 ### Changed
