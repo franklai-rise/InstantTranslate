@@ -173,7 +173,12 @@ public partial class App : System.Windows.Application
         {
             var anchor = new ScreenPoint(160, 140);
             _popupManager?.ShowLoading(long.MaxValue, anchor);
-            await Task.Delay(250);
+            await Task.Delay(180);
+            if (_popupManager?.GetWindowForVisualTest(long.MaxValue)?.IsVisible == true)
+            {
+                throw new InvalidOperationException("首次翻译在收到译文前不应显示等待窗口。");
+            }
+
             _popupManager?.ShowTranslation(
                 long.MaxValue,
                 "这是用于界面验证的中文原文。",
@@ -275,6 +280,9 @@ public partial class App : System.Windows.Application
             {
                 englishScrollViewer.ScrollToVerticalOffset(330);
                 await Task.Delay(100);
+                VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-intelligence-en"));
+                englishScrollViewer.ScrollToVerticalOffset(760);
+                await Task.Delay(100);
                 VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-fonts-en"));
             }
 
@@ -292,6 +300,9 @@ public partial class App : System.Windows.Application
             if (window.FindName("SettingsScrollViewer") is System.Windows.Controls.ScrollViewer chineseScrollViewer)
             {
                 chineseScrollViewer.ScrollToVerticalOffset(330);
+                await Task.Delay(100);
+                VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-intelligence-zh"));
+                chineseScrollViewer.ScrollToVerticalOffset(760);
                 await Task.Delay(100);
                 VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-fonts-zh"));
             }

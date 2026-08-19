@@ -92,6 +92,10 @@ internal static class UiLanguageCatalog
                 "DeepSeek returned invalid streaming data.",
             _ when value.Contains("超过 60 秒", StringComparison.Ordinal) =>
                 "The DeepSeek request exceeded 60 seconds and was canceled.",
+            _ when value.Contains("未返回首段译文", StringComparison.Ordinal) =>
+                "DeepSeek did not return translated text within 20 seconds. Check the network and try again.",
+            _ when value.Contains("流式响应停顿", StringComparison.Ordinal) =>
+                "The DeepSeek stream stopped responding for 15 seconds and was canceled.",
             _ when value.Contains("意外中断", StringComparison.Ordinal) =>
                 "The translation ended unexpectedly. Try again.",
             _ when value.Contains("未知翻译 Provider", StringComparison.Ordinal) =>

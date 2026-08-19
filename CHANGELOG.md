@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.1 - 2026-08-19
+
+### Changed
+
+- Reduced the in-memory translation cache to 128 entries, about one million characters, and a 20-minute TTL while preserving instant repeat-translation hits.
+- Replaced retained source text in cache keys with SHA-256 fingerprints, reducing memory retention and strengthening in-process privacy.
+- Bounded multi-range UI Automation context reads to 3,000 characters in total and reused prepared glossary/mode/style data across cache and provider stages.
+- Tuned pooled HTTP/2 connections and active-request keep-alive behavior for faster recovery after network or VPN changes.
+
+### Fixed
+
+- Explicitly release popup HWND hooks, rich-text documents, animations, and delayed feedback work when a popup closes, preventing avoidable memory growth during long sessions.
+
+## 0.4.0 - 2026-08-19
+
+### Added
+
+- Added opt-in surrounding-paragraph context from UI Automation without using the clipboard.
+- Added fast, balanced, and precise translation modes plus natural, formal, concise, academic, and technical writing styles.
+- Added a local personal glossary with `source => preferred translation` entries; only terms matching the current selection are sent.
+- Added cache isolation for context, mode, style, matching terminology, and prompt-version changes.
+- Added separate first-content and streaming-idle timeouts within the existing total request budget.
+
+### Changed
+
+- Reworked DeepSeek input as structured, untrusted translation data so context and terminology remain separate from instructions.
+- Delayed the initial popup until translated content arrives, removing the animated waiting state.
+- Refined the popup into a quieter content surface with an on-demand text-size control and a unified source/translation copy group.
+- Refined the neutral palette, spacing, corner relationships, accessibility names, and Settings presentation around a content-first hierarchy.
+
+### Security
+
+- Kept surrounding-context sharing disabled by default and documented exactly when extra text is sent.
+- Continued to keep source text, translations, and context out of persistent history; glossary preferences are stored locally.
+- Explicitly reject UI Automation password elements and native Edit controls carrying the Windows password style.
+
 ## 0.3.1 - 2026-08-13
 
 ### Changed

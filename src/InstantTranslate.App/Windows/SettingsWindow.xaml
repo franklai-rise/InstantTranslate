@@ -22,10 +22,10 @@
     <Window.Resources>
         <Style x:Key="CardStyle" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource AppCardBackgroundBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource AppCardBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="12" />
-            <Setter Property="Padding" Value="20" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Padding" Value="22" />
         </Style>
 
         <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
@@ -472,11 +472,9 @@
                     Height="42"
                     Margin="0,0,13,0"
                     VerticalAlignment="Center"
-                    Background="{DynamicResource AppFieldBackgroundBrush}"
-                    BorderBrush="{DynamicResource AppCardBorderBrush}"
-                    BorderThickness="1"
-                    CornerRadius="10">
-                <Image Width="29" Height="29" Source="/Assets/AppLogo.png" />
+                    Background="Transparent"
+                    BorderThickness="0">
+                <Image Width="34" Height="34" Source="/Assets/AppLogo.png" />
             </Border>
             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock FontSize="20"
@@ -651,6 +649,82 @@
                                 </ComboBox>
                             </StackPanel>
                         </Grid>
+
+                        <Border Height="1" Margin="0,17" Background="{DynamicResource AppCardBorderBrush}" />
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock FontWeight="SemiBold"
+                                           Tag="loc:UseSelectionContext"
+                                           Text="Use surrounding context" />
+                                <TextBlock Margin="0,3,18,0"
+                                           Style="{StaticResource SupportingTextStyle}"
+                                           Tag="loc:UseSelectionContextDescription"
+                                           Text="Use the surrounding paragraph to resolve ambiguity. Extra text is sent only when this is enabled." />
+                            </StackPanel>
+                            <CheckBox x:Name="UseSelectionContextCheckBox"
+                                      Grid.Column="1"
+                                      VerticalAlignment="Center"
+                                      automation:AutomationProperties.Name="Use surrounding context"
+                                      Style="{StaticResource SwitchStyle}" />
+                        </Grid>
+
+                        <Grid Margin="0,18,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="16" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                           Tag="loc:TranslationMode"
+                                           Text="Translation mode" />
+                                <ComboBox x:Name="TranslationModeComboBox"
+                                          IsEditable="False"
+                                          SelectedValuePath="Tag">
+                                    <ComboBoxItem Content="Fast" Tag="fast" />
+                                    <ComboBoxItem Content="Balanced" Tag="balanced" />
+                                    <ComboBoxItem Content="Precise" Tag="precise" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                           Tag="loc:TranslationTone"
+                                           Text="Writing style" />
+                                <ComboBox x:Name="TranslationToneComboBox"
+                                          IsEditable="False"
+                                          SelectedValuePath="Tag">
+                                    <ComboBoxItem Content="Natural" Tag="natural" />
+                                    <ComboBoxItem Content="Formal" Tag="formal" />
+                                    <ComboBoxItem Content="Concise" Tag="concise" />
+                                    <ComboBoxItem Content="Academic" Tag="academic" />
+                                    <ComboBoxItem Content="Technical" Tag="technical" />
+                                </ComboBox>
+                            </StackPanel>
+                        </Grid>
+
+                        <StackPanel Margin="0,18,0,0">
+                            <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                       Tag="loc:PersonalGlossary"
+                                       Text="Personal glossary" />
+                            <TextBox x:Name="PersonalGlossaryTextBox"
+                                     MinHeight="94"
+                                     MaxLength="20000"
+                                     Padding="11,9"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     VerticalContentAlignment="Top"
+                                     VerticalScrollBarVisibility="Auto"
+                                     automation:AutomationProperties.Name="Personal glossary" />
+                            <TextBlock Margin="0,7,0,0"
+                                       Style="{StaticResource SupportingTextStyle}"
+                                       Tag="loc:PersonalGlossaryDescription"
+                                       Text="One term per line: source =&gt; preferred translation. Stored only on this device." />
+                        </StackPanel>
 
                         <Grid Margin="0,17,0,0">
                             <Grid.ColumnDefinitions>

@@ -14,7 +14,9 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
 {
     private static readonly TimeSpan SelectionReadTimeout = TimeSpan.FromMilliseconds(4000);
     private static readonly TimeSpan TranslationTimeout = TimeSpan.FromSeconds(60);
-    private const int PromptVersion = 1;
+    private static readonly TimeSpan FirstContentTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromSeconds(15);
+    private const int PromptVersion = 2;
 
     private readonly GlobalMouseHook _mouseHook;
     private readonly ISelectionReader _selectionReader;
@@ -143,10 +145,21 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                 await Task.Delay(settings.SelectionDelayMilliseconds, lease.CancellationToken).ConfigureAwait(false);
             }
 
-            var selectedText = await _selectionReader
-                .TryReadSelectedTextAsync(gesture.End, lease.CancellationToken)
-                .WaitAsync(SelectionReadTimeout, lease.CancellationToken)
-                .ConfigureAwait(false);
+            var capture = _selectionReader is IContextualSelectionReader contextualReader
+                ? await contextualReader
+                    .TryReadSelectionAsync(
+                        gesture.End,
+                        settings.UseSelectionContext,
+                        lease.CancellationToken)
+                    .WaitAsync(SelectionReadTimeout, lease.CancellationToken)
+                    .ConfigureAwait(false)
+                : await ReadPlainSelectionAsync(
+                        _selectionReader,
+                        gesture.End,
+                        lease.CancellationToken)
+                    .WaitAsync(SelectionReadTimeout, lease.CancellationToken)
+                    .ConfigureAwait(false);
+            var selectedText = capture?.Text;
             if (string.IsNullOrWhiteSpace(selectedText) || !_requestGate.IsCurrent(lease.Version))
             {
                 return;
@@ -156,6 +169,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             await TranslateResolvedTextAsync(
                     lease.Version,
                     selectedText,
+                    capture?.Context,
                     targetLanguage,
                     gesture.End,
                     settings,
@@ -209,6 +223,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             await TranslateResolvedTextAsync(
                     lease.Version,
                     text,
+                    context: null,
                     targetLanguage,
                     anchorPoint,
                     settings,
@@ -273,6 +288,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             await TranslateResolvedTextAsync(
                     request.RequestId,
                     request.SourceText,
+                    context: null,
                     request.TargetLanguage,
                     request.AnchorPoint,
                     settings,
@@ -333,6 +349,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     private async Task TranslateResolvedTextAsync(
         long requestId,
         string sourceText,
+        string? context,
         string targetLanguage,
         ScreenPoint anchorPoint,
         AppSettings settings,
@@ -357,7 +374,13 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             return;
         }
 
-        var cacheKey = CreateCacheKey(sourceText, targetLanguage, settings);
+        var preparedOptions = PrepareTranslationOptions(sourceText, settings);
+        var cacheKey = CreateCacheKey(
+            sourceText,
+            context,
+            targetLanguage,
+            settings,
+            preparedOptions);
         if (_translationCache.TryGet(cacheKey, out var cachedTranslation))
         {
             if (!canPresent())
@@ -387,9 +410,11 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         await StreamTranslationAsync(
                 requestId,
                 sourceText,
+                context,
                 targetLanguage,
                 anchorPoint,
                 settings,
+                preparedOptions,
                 cacheKey,
                 cancellationToken,
                 canPresent)
@@ -399,16 +424,26 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     private async Task StreamTranslationAsync(
         long requestId,
         string sourceText,
+        string? context,
         string targetLanguage,
         ScreenPoint anchorPoint,
         AppSettings settings,
+        PreparedTranslationOptions preparedOptions,
         TranslationCacheKey cacheKey,
         CancellationToken cancellationToken,
         Func<bool> canPresent)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TranslationTimeout);
-        var request = new TranslationRequest(sourceText, settings.SourceLanguage, targetLanguage);
+        var request = new TranslationRequest(
+            sourceText,
+            settings.SourceLanguage,
+            targetLanguage,
+            context,
+            preparedOptions.Mode,
+            preparedOptions.Tone,
+            PersonalGlossary: string.Empty,
+            ApplicableGlossaryEntries: preparedOptions.ApplicableGlossaryEntries);
         var translationProvider = _translationProviderFactory.Create(settings);
         var translation = new StringBuilder();
         var updateThrottle = new StreamingUpdateThrottle();
@@ -418,17 +453,23 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         {
             await _translationConcurrency.WaitAsync(timeout.Token).ConfigureAwait(false);
             enteredConcurrencySlot = true;
-            await foreach (var chunk in translationProvider
-                               .TranslateAsync(request, timeout.Token)
-                               .WithCancellation(timeout.Token)
-                               .ConfigureAwait(false))
+            await using var enumerator = translationProvider
+                .TranslateAsync(request, timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            var receivedContent = false;
+            while (await MoveNextWithStageTimeoutAsync(
+                       enumerator,
+                       receivedContent,
+                       timeout).ConfigureAwait(false))
             {
+                var chunk = enumerator.Current;
                 if (!canPresent())
                 {
                     return;
                 }
 
                 translation.Append(chunk.TextDelta);
+                receivedContent |= chunk.TextDelta.Length > 0;
                 if (!updateThrottle.ShouldPublish(translation.Length, chunk.IsFinal))
                 {
                     continue;
@@ -483,11 +524,47 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
     }
 
+    private static async Task<bool> MoveNextWithStageTimeoutAsync(
+        IAsyncEnumerator<TranslationChunk> enumerator,
+        bool receivedContent,
+        CancellationTokenSource requestTimeout)
+    {
+        var stageTimeout = receivedContent ? StreamIdleTimeout : FirstContentTimeout;
+        try
+        {
+            return await enumerator.MoveNextAsync()
+                .AsTask()
+                .WaitAsync(stageTimeout, requestTimeout.Token)
+                .ConfigureAwait(false);
+        }
+        catch (TimeoutException exception)
+        {
+            requestTimeout.Cancel();
+            throw new TranslationProviderException(
+                receivedContent
+                    ? "DeepSeek 流式响应停顿超过 15 秒，已取消。"
+                    : "DeepSeek 在 20 秒内未返回首段译文，请检查网络后重试。",
+                exception);
+        }
+    }
+
     private static TranslationCacheKey CreateCacheKey(
         string sourceText,
+        string? context,
         string targetLanguage,
-        AppSettings settings)
+        AppSettings settings,
+        PreparedTranslationOptions preparedOptions)
     {
+        var applicableGlossary = string.Join(
+            '\n',
+            preparedOptions.ApplicableGlossaryEntries
+                .Select(entry => $"{entry.Source}=>{entry.Target}"));
+        var optionsSignature = string.Join(
+            '\u001F',
+            context ?? string.Empty,
+            preparedOptions.Mode,
+            preparedOptions.Tone,
+            applicableGlossary);
         return TranslationCacheKey.Create(
             settings.ProviderId,
             settings.DeepSeekEndpoint,
@@ -495,7 +572,30 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             settings.SourceLanguage,
             targetLanguage,
             sourceText,
-            PromptVersion);
+            PromptVersion,
+            optionsSignature);
+    }
+
+    private static PreparedTranslationOptions PrepareTranslationOptions(
+        string sourceText,
+        AppSettings settings)
+    {
+        var applicableGlossaryEntries = PersonalGlossary.Parse(settings.PersonalGlossary)
+            .Where(entry => sourceText.Contains(entry.Source, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        return new PreparedTranslationOptions(
+            TranslationPreferenceCatalog.NormalizeMode(settings.TranslationMode),
+            TranslationPreferenceCatalog.NormalizeTone(settings.TranslationTone),
+            applicableGlossaryEntries);
+    }
+
+    private static async Task<SelectionCapture?> ReadPlainSelectionAsync(
+        ISelectionReader reader,
+        ScreenPoint point,
+        CancellationToken cancellationToken)
+    {
+        var text = await reader.TryReadSelectedTextAsync(point, cancellationToken).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(text) ? null : new SelectionCapture(text);
     }
 
     private static string Localize(AppSettings settings, string english, string chinese)
@@ -504,6 +604,11 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             ? chinese
             : english;
     }
+
+    private sealed record PreparedTranslationOptions(
+        string Mode,
+        string Tone,
+        IReadOnlyList<GlossaryEntry> ApplicableGlossaryEntries);
 
     private void OnPopupClosed(long requestId)
     {

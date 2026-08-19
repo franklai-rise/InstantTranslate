@@ -246,7 +246,9 @@ internal sealed class ClipboardSelectionReader : ISelectionReader
             Y = point.Y,
         });
 
-        if (!TryGetExternalProcessId(windowHandle, out var processId))
+        if (NativeSelectionReader.IsPasswordStyle(
+                NativeMethods.GetWindowLongPtr(windowHandle, NativeMethods.GwlStyle).ToInt64())
+            || !TryGetExternalProcessId(windowHandle, out var processId))
         {
             return Array.Empty<IntPtr>();
         }

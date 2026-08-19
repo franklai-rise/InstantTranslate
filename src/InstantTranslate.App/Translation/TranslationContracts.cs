@@ -5,7 +5,12 @@ namespace InstantTranslate.Translation;
 internal sealed record TranslationRequest(
     string Text,
     string SourceLanguage,
-    string TargetLanguage);
+    string TargetLanguage,
+    string? Context = null,
+    string Mode = TranslationPreferenceCatalog.DefaultModeId,
+    string Tone = TranslationPreferenceCatalog.DefaultToneId,
+    string PersonalGlossary = "",
+    IReadOnlyList<GlossaryEntry>? ApplicableGlossaryEntries = null);
 
 internal sealed record TranslationChunk(string TextDelta, bool IsFinal = false);
 

@@ -28,6 +28,12 @@ internal partial class SettingsWindow : Window
             ["TranslationAppearanceDescription"] = ("Choose the default language direction and reading experience.", "设置默认语言方向与浮窗阅读体验。"),
             ["SourceLanguage"] = ("Source language", "源语言"),
             ["TargetLanguage"] = ("Target language", "目标语言"),
+            ["UseSelectionContext"] = ("Use surrounding context", "使用周围语境"),
+            ["UseSelectionContextDescription"] = ("Use the surrounding paragraph to resolve ambiguity. Extra text is sent only when this is enabled.", "使用选区所在段落帮助消除歧义；只有开启后才会发送周围文字。"),
+            ["TranslationMode"] = ("Translation mode", "翻译模式"),
+            ["TranslationTone"] = ("Writing style", "表达风格"),
+            ["PersonalGlossary"] = ("Personal glossary", "个人术语库"),
+            ["PersonalGlossaryDescription"] = ("One term per line: source => preferred translation. Stored only on this device.", "每行一个术语：原词 => 指定译法。内容仅保存在本机。"),
             ["EnglishTranslationFont"] = ("English translation font", "英文译文字体"),
             ["ChineseTranslationFont"] = ("Chinese translation font", "中文译文字体"),
             ["AccentColor"] = ("Accent color", "强调色"),
@@ -75,10 +81,18 @@ internal partial class SettingsWindow : Window
         ClipboardFallbackCheckBox.IsChecked = settings.UseClipboardFallback;
         SelectionDelayTextBox.Text = settings.SelectionDelayMilliseconds.ToString();
         MaximumSelectionTextBox.Text = settings.MaximumSelectionCharacters.ToString();
+        UseSelectionContextCheckBox.IsChecked = settings.UseSelectionContext;
         SetComboText(SourceLanguageComboBox, settings.SourceLanguage);
         SetComboText(
             TargetLanguageComboBox,
             settings.TargetLanguageMode == "auto" ? "自动判断" : settings.TargetLanguage);
+        SetComboText(
+            TranslationModeComboBox,
+            TranslationPreferenceCatalog.NormalizeMode(settings.TranslationMode));
+        SetComboText(
+            TranslationToneComboBox,
+            TranslationPreferenceCatalog.NormalizeTone(settings.TranslationTone));
+        PersonalGlossaryTextBox.Text = settings.PersonalGlossary;
         SelectTheme(settings.ColorTheme);
         CustomAccentColorTextBox.Text = settings.CustomAccentColor;
         DefaultFontSizeSlider.Value = Math.Clamp(settings.DefaultTranslationFontSize, 12, 30);
@@ -173,6 +187,12 @@ internal partial class SettingsWindow : Window
             SourceLanguage = sourceLanguage,
             TargetLanguageMode = targetSelection == "自动判断" ? "auto" : "fixed",
             TargetLanguage = targetSelection == "自动判断" ? "简体中文" : targetSelection,
+            UseSelectionContext = UseSelectionContextCheckBox.IsChecked == true,
+            TranslationMode = TranslationPreferenceCatalog.NormalizeMode(
+                ReadComboText(TranslationModeComboBox)),
+            TranslationTone = TranslationPreferenceCatalog.NormalizeTone(
+                ReadComboText(TranslationToneComboBox)),
+            PersonalGlossary = PersonalGlossaryTextBox.Text.Trim(),
             ColorTheme = colorTheme,
             CustomAccentColor = customAccentColor,
             DefaultTranslationFontSize = Math.Round(DefaultFontSizeSlider.Value, 1),
@@ -248,6 +268,12 @@ internal partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(
             ClipboardFallbackCheckBox,
             L("ClipboardFallback"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            UseSelectionContextCheckBox,
+            L("UseSelectionContext"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            PersonalGlossaryTextBox,
+            L("PersonalGlossary"));
 
         SelectionDelayTextBox.ToolTip = L("SelectionDelayTooltip");
         MaximumSelectionTextBox.ToolTip = L("MaximumSelectionTooltip");
@@ -261,6 +287,16 @@ internal partial class SettingsWindow : Window
         SetComboItemContent(TargetLanguageComboBox, "简体中文", _uiLanguage == "zh-CN" ? "简体中文" : "Simplified Chinese");
         SetComboItemContent(TargetLanguageComboBox, "英语", _uiLanguage == "zh-CN" ? "英语" : "English");
         SetComboItemContent(TargetLanguageComboBox, "日语", _uiLanguage == "zh-CN" ? "日语" : "Japanese");
+
+        SetComboItemContent(TranslationModeComboBox, "fast", _uiLanguage == "zh-CN" ? "快速" : "Fast");
+        SetComboItemContent(TranslationModeComboBox, "balanced", _uiLanguage == "zh-CN" ? "均衡" : "Balanced");
+        SetComboItemContent(TranslationModeComboBox, "precise", _uiLanguage == "zh-CN" ? "精确" : "Precise");
+
+        SetComboItemContent(TranslationToneComboBox, "natural", _uiLanguage == "zh-CN" ? "自然" : "Natural");
+        SetComboItemContent(TranslationToneComboBox, "formal", _uiLanguage == "zh-CN" ? "正式" : "Formal");
+        SetComboItemContent(TranslationToneComboBox, "concise", _uiLanguage == "zh-CN" ? "简洁" : "Concise");
+        SetComboItemContent(TranslationToneComboBox, "academic", _uiLanguage == "zh-CN" ? "学术" : "Academic");
+        SetComboItemContent(TranslationToneComboBox, "technical", _uiLanguage == "zh-CN" ? "技术" : "Technical");
 
         SetComboItemContent(ColorThemeComboBox, "ocean", _uiLanguage == "zh-CN" ? "深海蓝" : "Ocean blue");
         SetComboItemContent(ColorThemeComboBox, "violet", _uiLanguage == "zh-CN" ? "紫罗兰" : "Violet");
@@ -437,11 +473,24 @@ internal partial class SettingsWindow : Window
                 DeepSeekEndpoint = endpointText,
                 DeepSeekModel = model,
                 DeepSeekApiKey = apiKey,
+                TranslationMode = TranslationPreferenceCatalog.NormalizeMode(
+                    ReadComboText(TranslationModeComboBox)),
+                TranslationTone = TranslationPreferenceCatalog.NormalizeTone(
+                    ReadComboText(TranslationToneComboBox)),
+                PersonalGlossary = PersonalGlossaryTextBox.Text.Trim(),
             });
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             var receivedText = false;
             await foreach (var chunk in provider.TranslateAsync(
-                               new TranslationRequest("hello", "英语", "简体中文"),
+                               new TranslationRequest(
+                                   "hello",
+                                   "英语",
+                                   "简体中文",
+                                   Mode: TranslationPreferenceCatalog.NormalizeMode(
+                                       ReadComboText(TranslationModeComboBox)),
+                                   Tone: TranslationPreferenceCatalog.NormalizeTone(
+                                       ReadComboText(TranslationToneComboBox)),
+                                   PersonalGlossary: PersonalGlossaryTextBox.Text.Trim()),
                                timeout.Token))
             {
                 if (!string.IsNullOrWhiteSpace(chunk.TextDelta))

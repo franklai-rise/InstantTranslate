@@ -42,6 +42,11 @@ internal sealed class NativeSelectionReader : ISelectionReader
             var className = GetClassName(current);
             if (IsEditControl(className))
             {
+                if (IsPasswordStyle(NativeMethods.GetWindowLongPtr(current, NativeMethods.GwlStyle).ToInt64()))
+                {
+                    return null;
+                }
+
                 var selectedText = TryReadEditSelection(current);
                 if (!string.IsNullOrWhiteSpace(selectedText))
                 {
@@ -80,6 +85,11 @@ internal sealed class NativeSelectionReader : ISelectionReader
     internal static bool IsScintillaControl(string? className)
     {
         return className?.Equals("Scintilla", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    internal static bool IsPasswordStyle(long windowStyle)
+    {
+        return (windowStyle & NativeMethods.EsPassword) != 0;
     }
 
     private static string? TryReadEditSelection(IntPtr windowHandle)

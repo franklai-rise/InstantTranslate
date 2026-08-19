@@ -83,6 +83,27 @@ public sealed class SelectionReaderPipelineTests
         Assert.Equal(1, clipboardFallback.CallCount);
     }
 
+    [Fact]
+    public async Task ContextualPrimary_PreservesContextOnlyWhenRequested()
+    {
+        var primary = new ContextualStubSelectionReader();
+        var pipeline = new SelectionReaderPipeline(primary, new StubSelectionReader(null));
+
+        var withContext = await pipeline.TryReadSelectionAsync(
+            new ScreenPoint(10, 20),
+            includeContext: true,
+            CancellationToken.None);
+        var withoutContext = await pipeline.TryReadSelectionAsync(
+            new ScreenPoint(10, 20),
+            includeContext: false,
+            CancellationToken.None);
+
+        Assert.Equal("selected", withContext?.Text);
+        Assert.Equal("surrounding paragraph", withContext?.Context);
+        Assert.Null(withoutContext?.Context);
+        Assert.Equal(new[] { true, false }, primary.ContextRequests);
+    }
+
     private sealed class StubSelectionReader : ISelectionReader
     {
         private readonly string? _text;
@@ -107,6 +128,28 @@ public sealed class SelectionReaderPipelineTests
         {
             await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
             return null;
+        }
+    }
+
+    private sealed class ContextualStubSelectionReader : IContextualSelectionReader
+    {
+        public List<bool> ContextRequests { get; } = [];
+
+        public Task<string?> TryReadSelectedTextAsync(
+            ScreenPoint point,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult<string?>("selected");
+        }
+
+        public Task<SelectionCapture?> TryReadSelectionAsync(
+            ScreenPoint point,
+            bool includeContext,
+            CancellationToken cancellationToken)
+        {
+            ContextRequests.Add(includeContext);
+            return Task.FromResult<SelectionCapture?>(
+                new SelectionCapture("selected", includeContext ? "surrounding paragraph" : null));
         }
     }
 }

@@ -7,9 +7,9 @@ public sealed class TranslationMemoryCacheTests
     [Fact]
     public void Defaults_AreBoundedForDesktopUse()
     {
-        Assert.Equal(200, TranslationMemoryCache.DefaultMaxEntries);
-        Assert.Equal(4 * 1024 * 1024, TranslationMemoryCache.DefaultMaxCharacterCount);
-        Assert.Equal(TimeSpan.FromMinutes(30), TranslationMemoryCache.DefaultTimeToLive);
+        Assert.Equal(128, TranslationMemoryCache.DefaultMaxEntries);
+        Assert.Equal(1024 * 1024, TranslationMemoryCache.DefaultMaxCharacterCount);
+        Assert.Equal(TimeSpan.FromMinutes(20), TranslationMemoryCache.DefaultTimeToLive);
     }
 
     [Fact]
@@ -97,9 +97,40 @@ public sealed class TranslationMemoryCacheTests
         Assert.NotEqual(baseline, baseline with { Model = "deepseek-v4-pro" });
         Assert.NotEqual(baseline, baseline with { SourceLanguage = "en" });
         Assert.NotEqual(baseline, baseline with { TargetLanguage = "en" });
-        Assert.NotEqual(baseline, baseline with { Text = "world" });
+        Assert.NotEqual(
+            baseline,
+            TranslationCacheKey.Create(
+                "deepseek",
+                "https://api.deepseek.com/",
+                "deepseek-v4-flash",
+                "auto",
+                "zh-CN",
+                "world",
+                1));
         Assert.NotEqual(baseline, baseline with { PromptVersion = 2 });
+        Assert.NotEqual(
+            baseline,
+            TranslationCacheKey.Create(
+                "deepseek",
+                "https://api.deepseek.com/",
+                "deepseek-v4-flash",
+                "auto",
+                "zh-CN",
+                "hello",
+                1,
+                "different-context"));
         Assert.Equal("https://api.deepseek.com", baseline.Endpoint);
+    }
+
+    [Fact]
+    public void CacheKey_DoesNotRetainSourceText()
+    {
+        const string sensitiveText = "private source text 9f2dc1";
+
+        var key = CreateKey(sensitiveText);
+
+        Assert.Equal(64, key.TextFingerprint.Length);
+        Assert.DoesNotContain(sensitiveText, key.TextFingerprint, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -169,7 +200,8 @@ public sealed class TranslationMemoryCacheTests
             + key.Model.Length
             + key.SourceLanguage.Length
             + key.TargetLanguage.Length
-            + key.Text.Length
+            + key.TextFingerprint.Length
+            + key.OptionsFingerprint.Length
             + translation.Length;
     }
 }

@@ -1,28 +1,43 @@
 using System.Runtime.InteropServices;
 using System.Windows.Automation;
+using System.Windows.Automation.Text;
 using InstantTranslate.Models;
 
 namespace InstantTranslate.Selection;
 
-internal sealed class UiaSelectionReader : ISelectionReader
+internal sealed class UiaSelectionReader : IContextualSelectionReader
 {
-    private const int MaximumTextLength = 2000;
+    private const int MaximumTextLength = 20_000;
+    private const int MaximumContextLength = 3000;
     private const int MaximumAncestorDepth = 10;
 
-    public Task<string?> TryReadSelectedTextAsync(ScreenPoint point, CancellationToken cancellationToken)
+    public async Task<string?> TryReadSelectedTextAsync(ScreenPoint point, CancellationToken cancellationToken)
     {
-        return Task.Run(() => ReadSelection(point, cancellationToken), cancellationToken);
+        var capture = await TryReadSelectionAsync(point, includeContext: false, cancellationToken)
+            .ConfigureAwait(false);
+        return capture?.Text;
     }
 
-    private static string? ReadSelection(ScreenPoint point, CancellationToken cancellationToken)
+    public Task<SelectionCapture?> TryReadSelectionAsync(
+        ScreenPoint point,
+        bool includeContext,
+        CancellationToken cancellationToken)
+    {
+        return Task.Run(() => ReadSelection(point, includeContext, cancellationToken), cancellationToken);
+    }
+
+    private static SelectionCapture? ReadSelection(
+        ScreenPoint point,
+        bool includeContext,
+        CancellationToken cancellationToken)
     {
         foreach (var candidate in GetCandidateElements(point))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var selectedText = TryReadFromElement(candidate);
-            if (!string.IsNullOrWhiteSpace(selectedText))
+            var capture = TryReadFromElement(candidate, includeContext);
+            if (!string.IsNullOrWhiteSpace(capture?.Text))
             {
-                return selectedText;
+                return capture;
             }
         }
 
@@ -44,6 +59,11 @@ internal sealed class UiaSelectionReader : ISelectionReader
         }
         catch (COMException)
         {
+        }
+
+        if (TryIsPassword(hitElement))
+        {
+            yield break;
         }
 
         var hitProcessId = TryGetProcessId(hitElement);
@@ -97,6 +117,31 @@ internal sealed class UiaSelectionReader : ISelectionReader
         return hitProcessId is > 0 && hitProcessId == focusedProcessId;
     }
 
+    private static bool TryIsPassword(AutomationElement? element)
+    {
+        if (element is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return element.Current.IsPassword;
+        }
+        catch (ElementNotAvailableException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (COMException)
+        {
+            return false;
+        }
+    }
+
     private static int? TryGetProcessId(AutomationElement? element)
     {
         if (element is null)
@@ -122,7 +167,7 @@ internal sealed class UiaSelectionReader : ISelectionReader
         }
     }
 
-    private static string? TryReadFromElement(AutomationElement element)
+    private static SelectionCapture? TryReadFromElement(AutomationElement element, bool includeContext)
     {
         try
         {
@@ -141,6 +186,9 @@ internal sealed class UiaSelectionReader : ISelectionReader
 
             var remaining = MaximumTextLength;
             var selectedParts = new List<string>(ranges.Length);
+            var contexts = includeContext
+                ? new BoundedTextAccumulator(MaximumContextLength)
+                : null;
             foreach (var range in ranges)
             {
                 if (remaining <= 0)
@@ -156,11 +204,46 @@ internal sealed class UiaSelectionReader : ISelectionReader
 
                 selectedParts.Add(value);
                 remaining -= value.Length;
+
+                if (contexts is not null
+                    && contexts.MaximumNextPartLength > 0
+                    && TryReadParagraphContext(range, contexts.MaximumNextPartLength) is { Length: > 0 } context
+                    && !string.Equals(context, value, StringComparison.Ordinal))
+                {
+                    contexts.TryAdd(context);
+                }
             }
 
             return selectedParts.Count == 0
                 ? null
-                : string.Join(Environment.NewLine, selectedParts);
+                : new SelectionCapture(
+                    string.Join(Environment.NewLine, selectedParts),
+                    contexts?.Build());
+        }
+        catch (ElementNotAvailableException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (COMException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryReadParagraphContext(
+        TextPatternRange selectionRange,
+        int maximumLength)
+    {
+        try
+        {
+            var paragraphRange = selectionRange.Clone();
+            paragraphRange.ExpandToEnclosingUnit(TextUnit.Paragraph);
+            var context = TextNormalizer.Normalize(paragraphRange.GetText(maximumLength));
+            return context.Length == 0 ? null : context;
         }
         catch (ElementNotAvailableException)
         {

@@ -26,6 +26,9 @@ public sealed class SettingsStoreMigrationTests
         Assert.Equal("en", migrated.UiLanguage);
         Assert.Equal("Times New Roman", migrated.EnglishTranslationFontFamily);
         Assert.Equal("SimHei", migrated.ChineseTranslationFontFamily);
+        Assert.False(migrated.UseSelectionContext);
+        Assert.Equal("balanced", migrated.TranslationMode);
+        Assert.Equal("natural", migrated.TranslationTone);
     }
 
     [Fact]
@@ -36,6 +39,9 @@ public sealed class SettingsStoreMigrationTests
             UiLanguage = "xx-invalid",
             EnglishTranslationFontFamily = "Unknown English Font",
             ChineseTranslationFontFamily = "Unknown Chinese Font",
+            TranslationMode = "turbo",
+            TranslationTone = "dramatic",
+            PersonalGlossary = "  API => 接口  ",
             DeepSeekApiKey = "credential-secret",
         };
 
@@ -44,6 +50,9 @@ public sealed class SettingsStoreMigrationTests
         Assert.Equal("en", normalized.UiLanguage);
         Assert.Equal("Times New Roman", normalized.EnglishTranslationFontFamily);
         Assert.Equal("SimHei", normalized.ChineseTranslationFontFamily);
+        Assert.Equal("balanced", normalized.TranslationMode);
+        Assert.Equal("natural", normalized.TranslationTone);
+        Assert.Equal("API => 接口", normalized.PersonalGlossary);
         Assert.Equal("credential-secret", normalized.DeepSeekApiKey);
     }
 

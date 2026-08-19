@@ -2,7 +2,7 @@ using InstantTranslate.Models;
 
 namespace InstantTranslate.Selection;
 
-internal sealed class SelectionReaderPipeline : ISelectionReader
+internal sealed class SelectionReaderPipeline : IContextualSelectionReader
 {
     private static readonly TimeSpan PrimaryReadTimeout = TimeSpan.FromMilliseconds(800);
     private readonly ISelectionReader _primaryReader;
@@ -26,14 +26,27 @@ internal sealed class SelectionReaderPipeline : ISelectionReader
         ScreenPoint point,
         CancellationToken cancellationToken)
     {
-        string? selectedText = null;
+        var capture = await TryReadSelectionAsync(point, includeContext: false, cancellationToken)
+            .ConfigureAwait(false);
+        return capture?.Text;
+    }
+
+    public async Task<SelectionCapture?> TryReadSelectionAsync(
+        ScreenPoint point,
+        bool includeContext,
+        CancellationToken cancellationToken)
+    {
+        SelectionCapture? capture = null;
         using (var primaryTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
             primaryTimeout.CancelAfter(PrimaryReadTimeout);
             try
             {
-                selectedText = await _primaryReader
-                    .TryReadSelectedTextAsync(point, primaryTimeout.Token)
+                capture = await ReadCaptureAsync(
+                        _primaryReader,
+                        point,
+                        includeContext,
+                        primaryTimeout.Token)
                     .WaitAsync(PrimaryReadTimeout, cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -51,12 +64,12 @@ internal sealed class SelectionReaderPipeline : ISelectionReader
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(selectedText))
+        if (!string.IsNullOrWhiteSpace(capture?.Text))
         {
-            return selectedText;
+            return capture;
         }
 
-        selectedText = await _fallbackReader
+        var selectedText = await _fallbackReader
             .TryReadSelectedTextAsync(point, cancellationToken)
             .ConfigureAwait(false);
 
@@ -64,11 +77,33 @@ internal sealed class SelectionReaderPipeline : ISelectionReader
             || _clipboardFallbackReader is null
             || !_allowClipboardFallback())
         {
-            return selectedText;
+            return string.IsNullOrWhiteSpace(selectedText)
+                ? null
+                : new SelectionCapture(selectedText);
         }
 
-        return await _clipboardFallbackReader
+        selectedText = await _clipboardFallbackReader
             .TryReadSelectedTextAsync(point, cancellationToken)
             .ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(selectedText)
+            ? null
+            : new SelectionCapture(selectedText);
+    }
+
+    private static async Task<SelectionCapture?> ReadCaptureAsync(
+        ISelectionReader reader,
+        ScreenPoint point,
+        bool includeContext,
+        CancellationToken cancellationToken)
+    {
+        if (reader is IContextualSelectionReader contextualReader)
+        {
+            return await contextualReader
+                .TryReadSelectionAsync(point, includeContext, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var text = await reader.TryReadSelectedTextAsync(point, cancellationToken).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(text) ? null : new SelectionCapture(text);
     }
 }

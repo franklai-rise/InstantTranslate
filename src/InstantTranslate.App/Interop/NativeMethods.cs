@@ -36,7 +36,9 @@ internal static class NativeMethods
     internal const int HtBottomLeft = 16;
     internal const int HtBottomRight = 17;
     internal const int HtBorder = 18;
+    internal const int GwlStyle = -16;
     internal const int GwlExStyle = -20;
+    internal const long EsPassword = 0x00000020L;
     internal const long WsExTransparent = 0x00000020L;
     internal const long WsExToolWindow = 0x00000080L;
     internal const long WsExNoActivate = 0x08000000L;

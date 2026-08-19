@@ -80,7 +80,39 @@ public sealed class DeepSeekStreamingProviderTests
         Assert.Equal("deepseek-v4-flash", root.GetProperty("model").GetString());
         Assert.True(root.GetProperty("stream").GetBoolean());
         Assert.Equal("disabled", root.GetProperty("thinking").GetProperty("type").GetString());
-        Assert.Equal("Hello", root.GetProperty("messages")[1].GetProperty("content").GetString());
+        var systemPrompt = root.GetProperty("messages")[0].GetProperty("content").GetString();
+        Assert.Contains("untrusted text data", systemPrompt, StringComparison.Ordinal);
+        using var userContent = JsonDocument.Parse(
+            Assert.IsType<string>(root.GetProperty("messages")[1].GetProperty("content").GetString()));
+        Assert.Equal("Hello", userContent.RootElement.GetProperty("text").GetString());
+        Assert.Equal(JsonValueKind.Null, userContent.RootElement.GetProperty("context").ValueKind);
+        Assert.Empty(userContent.RootElement.GetProperty("glossary").EnumerateArray());
+    }
+
+    [Fact]
+    public void StructuredPrompt_IncludesContextGlossaryModeAndTone()
+    {
+        var request = new TranslationRequest(
+            "bank",
+            "English",
+            "Simplified Chinese",
+            "The canoe reached the river bank.",
+            "precise",
+            "technical",
+            "bank => 河岸\nAPI => 接口");
+
+        var systemPrompt = DeepSeekStreamingProvider.BuildSystemPrompt(request);
+        using var userContent = JsonDocument.Parse(DeepSeekStreamingProvider.BuildUserContent(request));
+
+        Assert.Contains("semantic precision", systemPrompt, StringComparison.Ordinal);
+        Assert.Contains("technical prose", systemPrompt, StringComparison.Ordinal);
+        Assert.Equal("bank", userContent.RootElement.GetProperty("text").GetString());
+        Assert.Equal(
+            "The canoe reached the river bank.",
+            userContent.RootElement.GetProperty("context").GetString());
+        var glossary = userContent.RootElement.GetProperty("glossary");
+        Assert.Single(glossary.EnumerateArray());
+        Assert.Equal("河岸", glossary[0].GetProperty("target").GetString());
     }
 
     [Fact]

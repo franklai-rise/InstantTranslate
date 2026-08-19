@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace InstantTranslate.Translation;
 
 /// <summary>
@@ -10,8 +13,9 @@ internal readonly record struct TranslationCacheKey(
     string Model,
     string SourceLanguage,
     string TargetLanguage,
-    string Text,
-    int PromptVersion)
+    string TextFingerprint,
+    int PromptVersion,
+    string OptionsFingerprint)
 {
     public static TranslationCacheKey Create(
         string providerId,
@@ -20,7 +24,8 @@ internal readonly record struct TranslationCacheKey(
         string sourceLanguage,
         string targetLanguage,
         string text,
-        int promptVersion)
+        int promptVersion,
+        string? optionsSignature = null)
     {
         ArgumentNullException.ThrowIfNull(providerId);
         ArgumentNullException.ThrowIfNull(endpoint);
@@ -35,8 +40,19 @@ internal readonly record struct TranslationCacheKey(
             model.Trim(),
             sourceLanguage.Trim(),
             targetLanguage.Trim(),
-            text,
-            promptVersion);
+            CreateFingerprint(text),
+            promptVersion,
+            CreateFingerprint(optionsSignature));
+    }
+
+    private static string CreateFingerprint(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     }
 }
 
@@ -46,9 +62,9 @@ internal readonly record struct TranslationCacheKey(
 /// </summary>
 internal sealed class TranslationMemoryCache
 {
-    internal const int DefaultMaxEntries = 200;
-    internal const int DefaultMaxCharacterCount = 4 * 1024 * 1024;
-    internal static readonly TimeSpan DefaultTimeToLive = TimeSpan.FromMinutes(30);
+    internal const int DefaultMaxEntries = 128;
+    internal const int DefaultMaxCharacterCount = 1024 * 1024;
+    internal static readonly TimeSpan DefaultTimeToLive = TimeSpan.FromMinutes(20);
 
     private readonly object _syncRoot = new();
     private readonly int _maxEntries;
@@ -182,7 +198,8 @@ internal sealed class TranslationMemoryCache
             + key.Model.Length
             + key.SourceLanguage.Length
             + key.TargetLanguage.Length
-            + key.Text.Length
+            + key.TextFingerprint.Length
+            + key.OptionsFingerprint.Length
             + translation.Length;
     }
 

@@ -4,6 +4,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using InstantTranslate.Interop;
 using InstantTranslate.Models;
 using InstantTranslate.Translation;
@@ -20,6 +21,8 @@ internal partial class PopupWindow : Window
     private const string DefaultChineseTranslationFontFamily = "SimHei, 黑体, Microsoft YaHei UI";
     private System.Windows.Media.FontFamily _chineseTranslationFont;
     private System.Windows.Media.FontFamily _englishTranslationFont;
+    private readonly CancellationTokenSource _lifetimeCancellation = new();
+    private HwndSource? _hwndSource;
     private IntPtr _windowHandle;
     private string _sourceText = string.Empty;
     private string _translatedText = string.Empty;
@@ -83,8 +86,11 @@ internal partial class PopupWindow : Window
             ? "zh-CN"
             : "en";
 
+        FontSizeButton.ToolTip = Localize("Text size", "文字大小");
         FontSizePanel.ToolTip = Localize("Drag to adjust text size", "拖动调节字体大小");
         DirectionButton.ToolTip = Localize("Switch translation language", "切换翻译语言");
+        CopySourceButton.Content = Localize("Source", "原文");
+        CopyTranslationButton.Content = Localize("Translation", "译文");
         CopySourceButton.ToolTip = Localize("Copy source", "复制原文");
         CopyTranslationButton.ToolTip = Localize("Copy translation", "复制译文");
         PinButton.ToolTip = IsPinned
@@ -93,6 +99,24 @@ internal partial class PopupWindow : Window
         CloseButton.ToolTip = Localize("Close", "关闭");
         CopySelectionMenuItem.Header = Localize("Copy", "复制");
         SelectAllMenuItem.Header = Localize("Select all", "全选");
+        System.Windows.Automation.AutomationProperties.SetName(
+            FontSizeButton,
+            Localize("Text size", "文字大小"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            DirectionButton,
+            Localize("Switch translation language", "切换翻译语言"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            CopySourceButton,
+            Localize("Copy source", "复制原文"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            CopyTranslationButton,
+            Localize("Copy translation", "复制译文"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            PinButton,
+            IsPinned ? Localize("Release window", "取消保留") : Localize("Keep window", "保留此窗口"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            CloseButton,
+            Localize("Close", "关闭"));
 
         UpdateDirectionButtonText();
         UpdateBodyMessageText();
@@ -177,19 +201,21 @@ internal partial class PopupWindow : Window
         else
         {
             TranslationRichTextBox.Visibility = Visibility.Collapsed;
-            LoadingSpinner.Visibility = Visibility.Visible;
             _bodyMessageKind = BodyMessageKind.Translating;
             _customFailureMessage = null;
             UpdateBodyMessageText();
-            LoadingPanel.Visibility = Visibility.Visible;
-            SetActionBarVisibility(Visibility.Visible);
+            LoadingPanel.Visibility = Visibility.Collapsed;
+            SetActionBarVisibility(Visibility.Collapsed);
         }
 
         _anchorPoint = anchorPoint;
         DirectionButton.IsEnabled = false;
         CopySourceButton.IsEnabled = false;
         CopyTranslationButton.IsEnabled = false;
-        ShowAt(anchorPoint);
+        if (_hasDisplayedTranslation)
+        {
+            ShowAt(anchorPoint);
+        }
     }
 
     public void ShowTranslation(
@@ -247,7 +273,6 @@ internal partial class PopupWindow : Window
             ? BodyMessageKind.Failure
             : BodyMessageKind.CustomFailure;
         UpdateBodyMessageText();
-        LoadingSpinner.Visibility = Visibility.Collapsed;
         TranslationRichTextBox.Visibility = Visibility.Collapsed;
         SetActionBarVisibility(Visibility.Visible);
         DirectionButton.IsEnabled = false;
@@ -260,7 +285,22 @@ internal partial class PopupWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         SourceInitialized -= OnSourceInitialized;
+        _lifetimeCancellation.Cancel();
+        BeginAnimation(OpacityProperty, null);
+        if (_hwndSource is not null)
+        {
+            _hwndSource.RemoveHook(WindowProcedure);
+            _hwndSource = null;
+        }
+
+        TranslationRichTextBox.Document.Blocks.Clear();
+        _translationParagraph = null;
+        _renderedTranslation = string.Empty;
+        _sourceText = string.Empty;
+        _translatedText = string.Empty;
+        _windowHandle = IntPtr.Zero;
         base.OnClosed(e);
+        _lifetimeCancellation.Dispose();
     }
 
     private void ShowAt(ScreenPoint anchorPoint)
@@ -268,7 +308,21 @@ internal partial class PopupWindow : Window
         var wasVisible = IsVisible;
         if (!IsVisible)
         {
+            Opacity = 0;
             Show();
+            if (SystemParameters.ClientAreaAnimation)
+            {
+                BeginAnimation(
+                    OpacityProperty,
+                    new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(120))
+                    {
+                        EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+                    });
+            }
+            else
+            {
+                Opacity = 1;
+            }
         }
 
         UpdateLayout();
@@ -294,8 +348,8 @@ internal partial class PopupWindow : Window
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         _windowHandle = new WindowInteropHelper(this).Handle;
-        var source = HwndSource.FromHwnd(_windowHandle);
-        source?.AddHook(WindowProcedure);
+        _hwndSource = HwndSource.FromHwnd(_windowHandle);
+        _hwndSource?.AddHook(WindowProcedure);
 
         var currentStyles = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GwlExStyle).ToInt64();
         var requiredStyles = (currentStyles | NativeMethods.WsExToolWindow) & ~NativeMethods.WsExNoActivate;
@@ -351,6 +405,13 @@ internal partial class PopupWindow : Window
         RetranslateRequested?.Invoke(this, nextTarget);
     }
 
+    private void FontSizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        var isExpanded = FontSizePanel.Visibility == Visibility.Visible;
+        FontSizePanel.Visibility = isExpanded ? Visibility.Collapsed : Visibility.Visible;
+        FontSizeButton.Tag = isExpanded ? null : "Selected";
+    }
+
     private void PinButton_Click(object sender, RoutedEventArgs e)
     {
         if (IsPinned)
@@ -358,6 +419,9 @@ internal partial class PopupWindow : Window
             IsPinned = false;
             PinButton.Tag = null;
             PinButton.ToolTip = Localize("Keep window", "保留此窗口");
+            System.Windows.Automation.AutomationProperties.SetName(
+                PinButton,
+                Localize("Keep window", "保留此窗口"));
             PopupSurface.Cursor = System.Windows.Input.Cursors.Arrow;
             PinStateChanged?.Invoke(this, false);
             return;
@@ -367,6 +431,9 @@ internal partial class PopupWindow : Window
         EnablePinnedResize();
         PinButton.Tag = "Pinned";
         PinButton.ToolTip = Localize("Release window", "取消保留");
+        System.Windows.Automation.AutomationProperties.SetName(
+            PinButton,
+            Localize("Release window", "取消保留"));
         PopupSurface.Cursor = System.Windows.Input.Cursors.SizeAll;
         PinStateChanged?.Invoke(this, true);
     }
@@ -468,7 +535,15 @@ internal partial class PopupWindow : Window
         }
 
         var feedbackVersion = ++_copyFeedbackVersion;
-        await Task.Delay(800);
+        try
+        {
+            await Task.Delay(800, _lifetimeCancellation.Token);
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
         if (feedbackVersion == _copyFeedbackVersion)
         {
             ApplyCopyButtonToolTips();
@@ -644,7 +719,7 @@ internal partial class PopupWindow : Window
 
     private static double CalculateLineHeight(double fontSize)
     {
-        return Math.Round(fontSize * 1.55, 2);
+        return Math.Round(fontSize * 1.45, 2);
     }
 
     private void TranslationRichTextBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)

@@ -25,6 +25,24 @@ internal sealed record AppSettings
 
     public string TargetLanguageMode { get; init; } = "auto";
 
+    /// <summary>
+    /// When enabled, UI Automation may read the paragraph surrounding the
+    /// selection and send it as non-translated context. It is disabled by
+    /// default because the surrounding text can contain additional private data.
+    /// </summary>
+    public bool UseSelectionContext { get; init; }
+
+    public string TranslationMode { get; init; } = TranslationPreferenceCatalog.DefaultModeId;
+
+    public string TranslationTone { get; init; } = TranslationPreferenceCatalog.DefaultToneId;
+
+    /// <summary>
+    /// One source-to-target term pair per line, for example: API => API.
+    /// This stores preferences only; source selections and translations are
+    /// still never persisted by default.
+    /// </summary>
+    public string PersonalGlossary { get; init; } = string.Empty;
+
     public string ColorTheme { get; init; } = ThemeCatalog.DefaultThemeId;
 
     public string CustomAccentColor { get; init; } = ThemeCatalog.DefaultCustomAccent;

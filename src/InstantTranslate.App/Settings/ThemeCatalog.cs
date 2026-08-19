@@ -43,13 +43,13 @@ internal static class ThemeCatalog
         return new ThemePalette(
             accent,
             Blend(accent, "#FFFFFF", 0.38),
-            Blend("#E8E8E8", accent, 0.035),
-            Blend("#D7D7D7", accent, 0.12),
-            Blend("#DCDCDC", accent, 0.055),
-            Blend("#CECECE", accent, 0.10),
-            Blend("#D4D4D4", accent, 0.16),
-            "#171717",
-            "#5F6368",
+            Blend("#F7F7F8", accent, 0.018),
+            Blend("#E2E2E5", accent, 0.06),
+            Blend("#EEEEF0", accent, 0.025),
+            Blend("#DEDEE2", accent, 0.055),
+            Blend("#D7D7DB", accent, 0.08),
+            "#1D1D1F",
+            "#6E6E73",
             accent);
     }
 

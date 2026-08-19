@@ -32,5 +32,9 @@ public sealed class AppSettingsTests
         Assert.Equal(UiLanguageCatalog.DefaultLanguageId, settings.UiLanguage);
         Assert.Equal(TranslationFontCatalog.DefaultEnglishFontFamily, settings.EnglishTranslationFontFamily);
         Assert.Equal(TranslationFontCatalog.DefaultChineseFontFamily, settings.ChineseTranslationFontFamily);
+        Assert.False(settings.UseSelectionContext);
+        Assert.Equal(TranslationPreferenceCatalog.DefaultModeId, settings.TranslationMode);
+        Assert.Equal(TranslationPreferenceCatalog.DefaultToneId, settings.TranslationTone);
+        Assert.Empty(settings.PersonalGlossary);
     }
 }

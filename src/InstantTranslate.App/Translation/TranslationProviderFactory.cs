@@ -18,6 +18,11 @@ internal sealed class TranslationProviderFactory : ITranslationProviderFactory, 
             ConnectTimeout = TimeSpan.FromSeconds(5),
             PooledConnectionLifetime = TimeSpan.FromMinutes(10),
             PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+            MaxConnectionsPerServer = 4,
+            EnableMultipleHttp2Connections = true,
+            KeepAlivePingDelay = TimeSpan.FromSeconds(30),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
+            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
         };
         _httpClient = new HttpClient(handler)
         {
@@ -25,6 +30,8 @@ internal sealed class TranslationProviderFactory : ITranslationProviderFactory, 
             // A second HttpClient timeout used to race that policy and could leave
             // the popup permanently displaying its loading state.
             Timeout = Timeout.InfiniteTimeSpan,
+            DefaultRequestVersion = HttpVersion.Version20,
+            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
         var version = Assembly.GetExecutingAssembly().GetName().Version;
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(

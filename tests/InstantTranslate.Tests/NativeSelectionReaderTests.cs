@@ -31,4 +31,14 @@ public sealed class NativeSelectionReaderTests
         Assert.False(NativeSelectionReader.IsEditControl(className));
         Assert.False(NativeSelectionReader.IsScintillaControl(className));
     }
+
+    [Theory]
+    [InlineData(0x00000020, true)]
+    [InlineData(0x50010020, true)]
+    [InlineData(0x50010000, false)]
+    [InlineData(0, false)]
+    public void DetectsPasswordEditStyle(long style, bool expected)
+    {
+        Assert.Equal(expected, NativeSelectionReader.IsPasswordStyle(style));
+    }
 }

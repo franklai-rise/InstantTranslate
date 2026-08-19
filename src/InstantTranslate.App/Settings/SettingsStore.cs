@@ -102,6 +102,9 @@ internal sealed class SettingsStore
         return value with
         {
             UiLanguage = UiLanguageCatalog.Normalize(value.UiLanguage),
+            TranslationMode = TranslationPreferenceCatalog.NormalizeMode(value.TranslationMode),
+            TranslationTone = TranslationPreferenceCatalog.NormalizeTone(value.TranslationTone),
+            PersonalGlossary = value.PersonalGlossary?.Trim() ?? string.Empty,
             EnglishTranslationFontFamily = TranslationFontCatalog.NormalizeEnglish(
                 value.EnglishTranslationFontFamily),
             ChineseTranslationFontFamily = TranslationFontCatalog.NormalizeChinese(
