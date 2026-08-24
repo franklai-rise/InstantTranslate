@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.IO;
 using InstantTranslate.Translation;
 
 namespace InstantTranslate.Tests;
@@ -87,6 +88,7 @@ public sealed class DeepSeekStreamingProviderTests
         Assert.Equal("Hello", userContent.RootElement.GetProperty("text").GetString());
         Assert.Equal(JsonValueKind.Null, userContent.RootElement.GetProperty("context").ValueKind);
         Assert.Empty(userContent.RootElement.GetProperty("glossary").EnumerateArray());
+        Assert.Empty(userContent.RootElement.GetProperty("examples").EnumerateArray());
     }
 
     [Fact]
@@ -99,7 +101,13 @@ public sealed class DeepSeekStreamingProviderTests
             "The canoe reached the river bank.",
             "precise",
             "technical",
-            "bank => 河岸\nAPI => 接口");
+            "bank => 河岸\nAPI => 接口",
+            TranslationExamples:
+            [
+                new TranslationExample(
+                    "The river bank was steep.",
+                    "河岸很陡。"),
+            ]);
 
         var systemPrompt = DeepSeekStreamingProvider.BuildSystemPrompt(request);
         using var userContent = JsonDocument.Parse(DeepSeekStreamingProvider.BuildUserContent(request));
@@ -113,6 +121,12 @@ public sealed class DeepSeekStreamingProviderTests
         var glossary = userContent.RootElement.GetProperty("glossary");
         Assert.Single(glossary.EnumerateArray());
         Assert.Equal("河岸", glossary[0].GetProperty("target").GetString());
+        var examples = userContent.RootElement.GetProperty("examples");
+        Assert.Single(examples.EnumerateArray());
+        Assert.Equal(
+            "The river bank was steep.",
+            examples[0].GetProperty("source").GetString());
+        Assert.Equal("河岸很陡。", examples[0].GetProperty("target").GetString());
     }
 
     [Fact]
@@ -137,17 +151,18 @@ public sealed class DeepSeekStreamingProviderTests
         Assert.Contains("401", exception.Message, StringComparison.Ordinal);
         Assert.Contains("Invalid API key", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("test-key", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(TranslationFailureKind.Authentication, exception.Kind);
         Assert.Equal(1, handler.RequestCount);
     }
 
     [Fact]
-    public async Task TranslateAsync_RetriesOneTransientStatusBeforeContent()
+    public async Task TranslateAsync_RetriesTwoTransientStatusesBeforeContent()
     {
         var attempt = 0;
         var handler = new RecordingHandler(_ =>
         {
             attempt++;
-            return attempt == 1
+            return attempt <= 2
                 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
                 : new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -169,7 +184,83 @@ public sealed class DeepSeekStreamingProviderTests
         }
 
         Assert.Equal("成功", text.ToString());
-        Assert.Equal(2, handler.RequestCount);
+        Assert.Equal(3, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task TranslateAsync_RetriesConnectTimeoutWhenCallerWasNotCancelled()
+    {
+        var attempt = 0;
+        var handler = new RecordingHandler(_ =>
+        {
+            attempt++;
+            if (attempt <= 2)
+            {
+                throw new TaskCanceledException("simulated connect timeout");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"恢复\"}}]}\n\ndata: [DONE]\n\n",
+                    Encoding.UTF8,
+                    "text/event-stream"),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var provider = CreateProvider(httpClient);
+        var text = new StringBuilder();
+
+        await foreach (var chunk in provider.TranslateAsync(
+                           new TranslationRequest("Hello", "英语", "简体中文"),
+                           CancellationToken.None))
+        {
+            text.Append(chunk.TextDelta);
+        }
+
+        Assert.Equal("恢复", text.ToString());
+        Assert.Equal(3, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task TranslateAsync_RetriesStreamFailureBeforeFirstContent()
+    {
+        var attempt = 0;
+        var handler = new RecordingHandler(_ =>
+        {
+            attempt++;
+            if (attempt <= 2)
+            {
+                var failedContent = new StreamContent(new ThrowingReadStream());
+                failedContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+                    "text/event-stream");
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = failedContent,
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"流恢复\"}}]}\n\ndata: [DONE]\n\n",
+                    Encoding.UTF8,
+                    "text/event-stream"),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var provider = CreateProvider(httpClient);
+        var text = new StringBuilder();
+
+        await foreach (var chunk in provider.TranslateAsync(
+                           new TranslationRequest("Hello", "英语", "简体中文"),
+                           CancellationToken.None))
+        {
+            text.Append(chunk.TextDelta);
+        }
+
+        Assert.Equal("流恢复", text.ToString());
+        Assert.Equal(3, handler.RequestCount);
     }
 
     [Fact]
@@ -257,5 +348,40 @@ public sealed class DeepSeekStreamingProviderTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return responseFactory(request);
         }
+    }
+
+    private sealed class ThrowingReadStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new IOException("Simulated response stream failure.");
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<int>(new IOException("Simulated response stream failure."));
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

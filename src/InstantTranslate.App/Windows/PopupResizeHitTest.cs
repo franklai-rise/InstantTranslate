@@ -5,6 +5,39 @@ namespace InstantTranslate.Windows;
 
 internal static class PopupResizeHitTest
 {
+    internal static int ResolveWithInsetTop(
+        NativeMethods.NativeRect windowBounds,
+        int insetTop,
+        ScreenPoint point,
+        int edgeThickness)
+    {
+        if (insetTop > windowBounds.Top && insetTop < windowBounds.Bottom)
+        {
+            var contentBounds = new NativeMethods.NativeRect
+            {
+                Left = windowBounds.Left,
+                Top = insetTop,
+                Right = windowBounds.Right,
+                Bottom = windowBounds.Bottom,
+            };
+            var contentHit = Resolve(contentBounds, point, edgeThickness);
+            if (contentHit is NativeMethods.HtTop
+                or NativeMethods.HtTopLeft
+                or NativeMethods.HtTopRight)
+            {
+                return contentHit;
+            }
+        }
+
+        return Resolve(windowBounds, point, edgeThickness) switch
+        {
+            NativeMethods.HtTop => NativeMethods.HtClient,
+            NativeMethods.HtTopLeft => NativeMethods.HtLeft,
+            NativeMethods.HtTopRight => NativeMethods.HtRight,
+            var hitTest => hitTest,
+        };
+    }
+
     internal static int Resolve(
         NativeMethods.NativeRect bounds,
         ScreenPoint point,

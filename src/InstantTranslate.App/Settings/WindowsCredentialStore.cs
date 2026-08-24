@@ -5,7 +5,14 @@ using System.Text;
 
 namespace InstantTranslate.Settings;
 
-internal sealed class WindowsCredentialStore
+internal interface IApiKeyStore
+{
+    string ReadApiKey();
+
+    void SaveApiKey(string apiKey);
+}
+
+internal sealed class WindowsCredentialStore : IApiKeyStore
 {
     private const int CredentialTypeGeneric = 1;
     private const int CredentialPersistLocalMachine = 2;

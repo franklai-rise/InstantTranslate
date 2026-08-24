@@ -35,11 +35,45 @@ internal static class WindowProcessResolver
         return processId == (uint)Environment.ProcessId;
     }
 
-    public static bool ArePointsInSameExternalProcess(ScreenPoint first, ScreenPoint second)
+    public static uint? TryGetExternalProcessIdAt(ScreenPoint point)
     {
-        return TryGetExternalProcessIdAt(first, out var firstProcessId)
-            && TryGetExternalProcessIdAt(second, out var secondProcessId)
-            && firstProcessId == secondProcessId;
+        var windowHandle = NativeMethods.WindowFromPoint(new NativeMethods.NativePoint
+        {
+            X = point.X,
+            Y = point.Y,
+        });
+        if (windowHandle == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(windowHandle, out var processId);
+        return processId == 0 || processId == (uint)Environment.ProcessId
+            ? null
+            : processId;
+    }
+
+    public static bool ArePointsInSameExternalWindow(ScreenPoint first, ScreenPoint second)
+    {
+        return TryGetSelectionTargetAt(first, out var firstTarget)
+            && TryGetSelectionTargetAt(second, out var secondTarget)
+            && AreTargetsInSameExternalWindow(
+                firstTarget,
+                secondTarget,
+                (uint)Environment.ProcessId);
+    }
+
+    internal static bool AreTargetsInSameExternalWindow(
+        SelectionWindowTarget first,
+        SelectionWindowTarget second,
+        uint currentProcessId)
+    {
+        return first.RootOwnerHandle != IntPtr.Zero
+            && first.RootOwnerHandle == second.RootOwnerHandle
+            && first.RootOwnerProcessId != 0
+            && first.RootOwnerProcessId != currentProcessId
+            && second.RootOwnerProcessId != 0
+            && second.RootOwnerProcessId != currentProcessId;
     }
 
     public static bool IsClipboardFallbackAllowedAt(ScreenPoint point)
@@ -81,20 +115,34 @@ internal static class WindowProcessResolver
             && !ClipboardFallbackBlockedProcesses.Contains(processName);
     }
 
-    private static bool TryGetExternalProcessIdAt(ScreenPoint point, out uint processId)
+    private static bool TryGetSelectionTargetAt(
+        ScreenPoint point,
+        out SelectionWindowTarget target)
     {
+        target = default;
         var windowHandle = NativeMethods.WindowFromPoint(new NativeMethods.NativePoint
         {
             X = point.X,
             Y = point.Y,
         });
-        processId = 0;
         if (windowHandle == IntPtr.Zero)
         {
             return false;
         }
 
-        NativeMethods.GetWindowThreadProcessId(windowHandle, out processId);
+        var rootOwnerHandle = NativeMethods.GetAncestor(windowHandle, NativeMethods.GaRootOwner);
+        if (rootOwnerHandle == IntPtr.Zero)
+        {
+            rootOwnerHandle = NativeMethods.GetAncestor(windowHandle, NativeMethods.GaRoot);
+        }
+
+        if (rootOwnerHandle == IntPtr.Zero)
+        {
+            rootOwnerHandle = windowHandle;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(rootOwnerHandle, out var processId);
+        target = new SelectionWindowTarget(rootOwnerHandle, processId);
         return processId != 0 && processId != (uint)Environment.ProcessId;
     }
 
@@ -109,3 +157,7 @@ internal static class WindowProcessResolver
         return processId != 0 && processId != (uint)Environment.ProcessId;
     }
 }
+
+internal readonly record struct SelectionWindowTarget(
+    IntPtr RootOwnerHandle,
+    uint RootOwnerProcessId);

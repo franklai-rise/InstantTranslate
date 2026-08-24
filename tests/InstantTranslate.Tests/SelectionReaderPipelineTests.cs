@@ -47,6 +47,22 @@ public sealed class SelectionReaderPipelineTests
     }
 
     [Fact]
+    public async Task UsesFallbackWhenPrimaryProviderThrows()
+    {
+        var fallback = new StubSelectionReader("来自安全回退");
+        var pipeline = new SelectionReaderPipeline(
+            new ThrowingSelectionReader(),
+            fallback);
+
+        var result = await pipeline.TryReadSelectedTextAsync(
+            new ScreenPoint(10, 20),
+            CancellationToken.None);
+
+        Assert.Equal("来自安全回退", result);
+        Assert.Equal(1, fallback.CallCount);
+    }
+
+    [Fact]
     public async Task DoesNotInvokeClipboardFallbackWhenDisabled()
     {
         var primary = new StubSelectionReader(null);
@@ -128,6 +144,16 @@ public sealed class SelectionReaderPipelineTests
         {
             await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
             return null;
+        }
+    }
+
+    private sealed class ThrowingSelectionReader : ISelectionReader
+    {
+        public Task<string?> TryReadSelectedTextAsync(
+            ScreenPoint point,
+            CancellationToken cancellationToken)
+        {
+            throw new InvalidOperationException("Simulated broken UI Automation provider.");
         }
     }
 

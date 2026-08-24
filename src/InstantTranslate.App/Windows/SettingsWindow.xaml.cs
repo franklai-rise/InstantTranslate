@@ -34,6 +34,14 @@ internal partial class SettingsWindow : Window
             ["TranslationTone"] = ("Writing style", "表达风格"),
             ["PersonalGlossary"] = ("Personal glossary", "个人术语库"),
             ["PersonalGlossaryDescription"] = ("One term per line: source => preferred translation. Stored only on this device.", "每行一个术语：原词 => 指定译法。内容仅保存在本机。"),
+            ["TranslationMemory"] = ("Saved translation memory", "已保存的翻译记忆"),
+            ["TranslationMemoryDescription"] = ("Only corrections you save from the popup are encrypted for this Windows account. Up to 3 relevant pairs may guide future requests.", "仅保存你在浮窗中主动修正的译文，并为当前 Windows 账户加密；最多 3 组相关示例可辅助后续请求。"),
+            ["ClearTranslationMemory"] = ("Clear", "清除"),
+            ["TranslationMemoryEmpty"] = ("No saved corrections", "暂无已保存的修正"),
+            ["TranslationMemoryCount"] = ("{0} encrypted correction(s) for this Windows account", "已为当前 Windows 账户加密保存 {0} 条修正"),
+            ["ClearTranslationMemoryTitle"] = ("Clear translation memory?", "清除翻译记忆？"),
+            ["ClearTranslationMemoryMessage"] = ("This permanently removes every source and corrected translation you explicitly saved.", "这会永久删除你主动保存的全部原文和修正译文。"),
+            ["ClearTranslationMemoryFailed"] = ("Could not clear translation memory.", "无法清除翻译记忆。"),
             ["EnglishTranslationFont"] = ("English translation font", "英文译文字体"),
             ["ChineseTranslationFont"] = ("Chinese translation font", "中文译文字体"),
             ["AccentColor"] = ("Accent color", "强调色"),
@@ -71,9 +79,19 @@ internal partial class SettingsWindow : Window
 
     private string _uiLanguage = "en";
     private string? _connectionStatusLocalizationKey;
+    private readonly Func<int>? _getTranslationMemoryCount;
+    private readonly Action? _clearTranslationMemory;
+    private CancellationTokenSource? _connectionTestCancellation;
+    private bool _isClosed;
+    private bool _apiKeyClearRequested;
 
-    public SettingsWindow(AppSettings settings)
+    public SettingsWindow(
+        AppSettings settings,
+        Func<int>? getTranslationMemoryCount = null,
+        Action? clearTranslationMemory = null)
     {
+        _getTranslationMemoryCount = getTranslationMemoryCount;
+        _clearTranslationMemory = clearTranslationMemory;
         InitializeComponent();
 
         EnabledCheckBox.IsChecked = settings.IsEnabled;
@@ -95,7 +113,7 @@ internal partial class SettingsWindow : Window
         PersonalGlossaryTextBox.Text = settings.PersonalGlossary;
         SelectTheme(settings.ColorTheme);
         CustomAccentColorTextBox.Text = settings.CustomAccentColor;
-        DefaultFontSizeSlider.Value = Math.Clamp(settings.DefaultTranslationFontSize, 12, 30);
+        DefaultFontSizeSlider.Value = Math.Clamp(settings.DefaultTranslationFontSize, 12, 34);
         SetComboText(
             EnglishTranslationFontComboBox,
             TranslationFontCatalog.NormalizeEnglish(settings.EnglishTranslationFontFamily));
@@ -109,9 +127,23 @@ internal partial class SettingsWindow : Window
         ApplyUiLanguage(settings.UiLanguage);
         UpdateProviderFields();
         UpdateThemePreview();
+        UpdateTranslationMemoryStatus();
     }
 
     public AppSettings? ResultSettings { get; private set; }
+
+    public bool ApiKeyClearRequested => _apiKeyClearRequested;
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _isClosed = true;
+        _connectionTestCancellation?.Cancel();
+        ApiKeyPasswordBox.Clear();
+        DataContext = null;
+        Content = null;
+        Resources.Clear();
+        base.OnClosed(e);
+    }
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
@@ -169,7 +201,7 @@ internal partial class SettingsWindow : Window
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (string.IsNullOrWhiteSpace(apiKey) && !_apiKeyClearRequested)
             {
                 WpfMessageBox.Show(this, L("ApiKeyEmptyError"), L("InvalidSettings"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 ApiKeyPasswordBox.Focus();
@@ -274,6 +306,9 @@ internal partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(
             PersonalGlossaryTextBox,
             L("PersonalGlossary"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            ClearTranslationMemoryButton,
+            L("ClearTranslationMemory"));
 
         SelectionDelayTextBox.ToolTip = L("SelectionDelayTooltip");
         MaximumSelectionTextBox.ToolTip = L("MaximumSelectionTooltip");
@@ -317,6 +352,59 @@ internal partial class SettingsWindow : Window
         {
             ConnectionStatusText.Text = L(_connectionStatusLocalizationKey);
         }
+
+        UpdateTranslationMemoryStatus();
+    }
+
+    private void ClearTranslationMemoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_clearTranslationMemory is null || (_getTranslationMemoryCount?.Invoke() ?? 0) == 0)
+        {
+            return;
+        }
+
+        var result = WpfMessageBox.Show(
+            this,
+            L("ClearTranslationMemoryMessage"),
+            L("ClearTranslationMemoryTitle"),
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            _clearTranslationMemory();
+            UpdateTranslationMemoryStatus();
+        }
+        catch (Exception exception) when (exception is System.IO.IOException
+            or UnauthorizedAccessException)
+        {
+            System.Diagnostics.Debug.WriteLine($"InstantTranslate could not clear translation memory: {exception}");
+            WpfMessageBox.Show(
+                this,
+                L("ClearTranslationMemoryFailed"),
+                L("ClearTranslationMemoryTitle"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private void UpdateTranslationMemoryStatus()
+    {
+        if (TranslationMemoryStatusText is null || ClearTranslationMemoryButton is null)
+        {
+            return;
+        }
+
+        var count = _getTranslationMemoryCount?.Invoke() ?? 0;
+        TranslationMemoryStatusText.Text = count == 0
+            ? L("TranslationMemoryEmpty")
+            : string.Format(System.Globalization.CultureInfo.CurrentCulture, L("TranslationMemoryCount"), count);
+        ClearTranslationMemoryButton.IsEnabled = count > 0 && _clearTranslationMemory is not null;
     }
 
     private void ApplyLocalizedContent(DependencyObject root)
@@ -464,6 +552,10 @@ internal partial class SettingsWindow : Window
 
         TestConnectionButton.IsEnabled = false;
         SetLocalizedConnectionStatus("Connecting", "AppMutedTextBrush");
+        _connectionTestCancellation?.Cancel();
+        _connectionTestCancellation?.Dispose();
+        var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        _connectionTestCancellation = timeout;
         try
         {
             using var factory = new TranslationProviderFactory();
@@ -479,7 +571,6 @@ internal partial class SettingsWindow : Window
                     ReadComboText(TranslationToneComboBox)),
                 PersonalGlossary = PersonalGlossaryTextBox.Text.Trim(),
             });
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             var receivedText = false;
             await foreach (var chunk in provider.TranslateAsync(
                                new TranslationRequest(
@@ -500,6 +591,11 @@ internal partial class SettingsWindow : Window
                 }
             }
 
+            if (_isClosed)
+            {
+                return;
+            }
+
             if (!receivedText)
             {
                 throw new TranslationProviderException(L("NoTestTranslation"));
@@ -509,10 +605,18 @@ internal partial class SettingsWindow : Window
         }
         catch (OperationCanceledException)
         {
-            SetLocalizedConnectionStatus("ConnectionTimeout", "DangerBrush");
+            if (!_isClosed)
+            {
+                SetLocalizedConnectionStatus("ConnectionTimeout", "DangerBrush");
+            }
         }
         catch (TranslationProviderException exception)
         {
+            if (_isClosed)
+            {
+                return;
+            }
+
             var message = UiLanguageCatalog.LocalizeProviderError(_uiLanguage, exception.Message);
             SetConnectionStatus(
                 message.Length <= 58 ? message : message[..58] + "…",
@@ -520,6 +624,11 @@ internal partial class SettingsWindow : Window
         }
         catch (Exception)
         {
+            if (_isClosed)
+            {
+                return;
+            }
+
             SetConnectionStatus(
                 _uiLanguage == UiLanguageCatalog.SimplifiedChineseLanguageId
                     ? "连接失败，请检查配置"
@@ -528,12 +637,22 @@ internal partial class SettingsWindow : Window
         }
         finally
         {
-            TestConnectionButton.IsEnabled = true;
+            if (ReferenceEquals(_connectionTestCancellation, timeout))
+            {
+                _connectionTestCancellation = null;
+            }
+
+            timeout.Dispose();
+            if (!_isClosed)
+            {
+                TestConnectionButton.IsEnabled = true;
+            }
         }
     }
 
     private void ClearApiKeyButton_Click(object sender, RoutedEventArgs e)
     {
+        _apiKeyClearRequested = true;
         ApiKeyPasswordBox.Clear();
         SetLocalizedConnectionStatus("DeleteAfterSave", "AppMutedTextBrush");
         ApiKeyPasswordBox.Focus();

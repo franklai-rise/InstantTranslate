@@ -13,6 +13,7 @@ internal sealed class SingleInstanceCoordinator : IDisposable
     private readonly object _syncRoot = new();
     private readonly Mutex _lifetimeMutex;
     private readonly EventWaitHandle _activationEvent;
+    private readonly EventWaitHandle _activationAcknowledgedEvent;
     private readonly EventWaitHandle _stopEvent = new(false, EventResetMode.ManualReset);
     private Thread? _listenerThread;
     private Action? _activationCallback;
@@ -21,14 +22,18 @@ internal sealed class SingleInstanceCoordinator : IDisposable
     private SingleInstanceCoordinator(
         Mutex lifetimeMutex,
         EventWaitHandle activationEvent,
+        EventWaitHandle activationAcknowledgedEvent,
         bool isPrimary)
     {
         _lifetimeMutex = lifetimeMutex;
         _activationEvent = activationEvent;
+        _activationAcknowledgedEvent = activationAcknowledgedEvent;
         IsPrimary = isPrimary;
     }
 
     public bool IsPrimary { get; }
+
+    public bool WasActivationAcknowledged { get; private set; }
 
     /// <summary>
     /// Acquires the lifetime slot for <paramref name="instanceName"/>. A later
@@ -36,11 +41,68 @@ internal sealed class SingleInstanceCoordinator : IDisposable
     /// </summary>
     public static SingleInstanceCoordinator Acquire(string? instanceName = null)
     {
+        return AcquireCore(instanceName, signalPrimary: true);
+    }
+
+    /// <summary>
+    /// Handles the narrow race where a user relaunches while the previous
+    /// primary process is still releasing its kernel objects. A live primary is
+    /// still activated immediately; if it disappears during the short grace
+    /// period, the relaunch takes over instead of leaving no running instance.
+    /// </summary>
+    public static SingleInstanceCoordinator AcquireWithTakeoverRetry(
+        string? instanceName = null,
+        int retryCount = 30,
+        TimeSpan? retryDelay = null)
+    {
+        if (retryCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(retryCount));
+        }
+
+        var delay = retryDelay ?? TimeSpan.FromMilliseconds(120);
+        if (delay < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(retryDelay));
+        }
+
+        for (var attempt = 0; ; attempt++)
+        {
+            var coordinator = AcquireCore(
+                instanceName,
+                signalPrimary: attempt == 0);
+            if (coordinator.IsPrimary)
+            {
+                return coordinator;
+            }
+
+            if (coordinator.WaitForActivationAcknowledgement(delay))
+            {
+                return coordinator;
+            }
+
+            if (attempt >= retryCount)
+            {
+                return coordinator;
+            }
+
+            coordinator.Dispose();
+        }
+    }
+
+    private static SingleInstanceCoordinator AcquireCore(
+        string? instanceName,
+        bool signalPrimary)
+    {
         var normalizedName = NormalizeInstanceName(instanceName ?? CreateDefaultInstanceName());
         var activationEvent = new EventWaitHandle(
             false,
             EventResetMode.AutoReset,
             $"{KernelObjectNamespace}{normalizedName}.Activate");
+        var activationAcknowledgedEvent = new EventWaitHandle(
+            false,
+            EventResetMode.AutoReset,
+            $"{KernelObjectNamespace}{normalizedName}.Activated");
 
         Mutex? lifetimeMutex = null;
         try
@@ -55,9 +117,10 @@ internal sealed class SingleInstanceCoordinator : IDisposable
             var coordinator = new SingleInstanceCoordinator(
                 lifetimeMutex,
                 activationEvent,
+                activationAcknowledgedEvent,
                 createdNew);
 
-            if (!createdNew)
+            if (!createdNew && signalPrimary)
             {
                 activationEvent.Set();
             }
@@ -68,14 +131,26 @@ internal sealed class SingleInstanceCoordinator : IDisposable
         {
             lifetimeMutex?.Dispose();
             activationEvent.Dispose();
+            activationAcknowledgedEvent.Dispose();
             throw;
         }
     }
 
+    private bool WaitForActivationAcknowledgement(TimeSpan timeout)
+    {
+        if (IsPrimary)
+        {
+            return false;
+        }
+
+        WasActivationAcknowledged = _activationAcknowledgedEvent.WaitOne(timeout);
+        return WasActivationAcknowledged;
+    }
+
     /// <summary>
-    /// Starts the primary instance's background activation listener.
-    /// The callback is dispatched on a ThreadPool thread and should marshal to
-    /// the UI dispatcher when it needs to touch WPF state.
+    /// Starts the primary instance's background activation listener. The
+    /// callback runs on the listener thread and must return promptly; it should
+    /// enqueue any WPF work onto the UI dispatcher.
     /// </summary>
     public void StartListening(Action activationCallback)
     {
@@ -130,6 +205,7 @@ internal sealed class SingleInstanceCoordinator : IDisposable
 
         _stopEvent.Dispose();
         _activationEvent.Dispose();
+        _activationAcknowledgedEvent.Dispose();
         _lifetimeMutex.Dispose();
     }
 
@@ -150,6 +226,7 @@ internal sealed class SingleInstanceCoordinator : IDisposable
 
         while (WaitHandle.WaitAny(waitHandles) == 1)
         {
+            _activationAcknowledgedEvent.Set();
             Action? callback;
             lock (_syncRoot)
             {
@@ -163,20 +240,14 @@ internal sealed class SingleInstanceCoordinator : IDisposable
 
             if (callback is not null)
             {
-                ThreadPool.QueueUserWorkItem(
-                    static state =>
-                    {
-                        try
-                        {
-                            ((Action)state!).Invoke();
-                        }
-                        catch
-                        {
-                            // A UI activation failure must not terminate the listener.
-                        }
-                    },
-                    callback,
-                    preferLocal: false);
+                try
+                {
+                    callback.Invoke();
+                }
+                catch
+                {
+                    // A UI activation failure must not terminate the listener.
+                }
             }
         }
     }

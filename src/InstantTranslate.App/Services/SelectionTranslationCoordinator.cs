@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Windows.Threading;
 using InstantTranslate.Hooks;
@@ -16,7 +17,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     private static readonly TimeSpan TranslationTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan FirstContentTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromSeconds(15);
-    private const int PromptVersion = 2;
+    private const int PromptVersion = 3;
 
     private readonly GlobalMouseHook _mouseHook;
     private readonly ISelectionReader _selectionReader;
@@ -24,8 +25,11 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     private readonly IPopupPresenter _popupPresenter;
     private readonly Dispatcher _dispatcher;
     private readonly Func<AppSettings> _getSettings;
+    private readonly TranslationPerformanceMonitor _performanceMonitor;
+    private readonly TranslationMemoryStore _translationMemoryStore;
     private readonly RequestVersionGate _requestGate = new();
     private readonly TranslationMemoryCache _translationCache = new();
+    private readonly TranslationInFlightRegistry _inFlightTranslations = new();
     private readonly SemaphoreSlim _translationConcurrency = new(3, 3);
     private readonly object _retranslationSync = new();
     private readonly Dictionary<long, CancellationTokenSource> _retranslations = new();
@@ -39,7 +43,9 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         ITranslationProviderFactory translationProviderFactory,
         IPopupPresenter popupPresenter,
         Dispatcher dispatcher,
-        Func<AppSettings> getSettings)
+        Func<AppSettings> getSettings,
+        TranslationPerformanceMonitor? performanceMonitor = null,
+        TranslationMemoryStore? translationMemoryStore = null)
     {
         _mouseHook = mouseHook;
         _selectionReader = selectionReader;
@@ -47,12 +53,15 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         _popupPresenter = popupPresenter;
         _dispatcher = dispatcher;
         _getSettings = getSettings;
+        _performanceMonitor = performanceMonitor ?? new TranslationPerformanceMonitor();
+        _translationMemoryStore = translationMemoryStore ?? new TranslationMemoryStore();
 
         _mouseHook.MousePressed += OnMousePressed;
         _mouseHook.SelectionGestureCompleted += OnSelectionGestureCompleted;
         _popupPresenter.RetranslateRequested += OnRetranslateRequested;
         _popupPresenter.PopupClosed += OnPopupClosed;
         _popupPresenter.PinStateChanged += OnPopupPinStateChanged;
+        _popupPresenter.TranslationCorrectionRequested += OnTranslationCorrectionRequested;
     }
 
     public event Action<string>? TranslationFailed;
@@ -85,28 +94,23 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             DispatcherPriority.Send);
     }
 
+    private void OnSelectionGestureCompleted(SelectionGesture gesture)
+    {
+        _dispatcher.BeginInvoke(
+            () => BeginSelectionIfExternal(gesture),
+            DispatcherPriority.Send);
+    }
+
     private void OnMousePressed(ScreenPoint point)
     {
         _dispatcher.BeginInvoke(
             () =>
             {
-                if (_disposed
-                    || _popupPresenter.IsPointOverPopup(point)
-                    || WindowProcessResolver.IsCurrentProcessAt(point))
+                if (!_disposed)
                 {
-                    return;
+                    _popupPresenter.HideTransientPopupIfOutside(point);
                 }
-
-                _requestGate.CancelActive();
-                _popupPresenter.HideTransientPopup();
             },
-            DispatcherPriority.Send);
-    }
-
-    private void OnSelectionGestureCompleted(SelectionGesture gesture)
-    {
-        _dispatcher.BeginInvoke(
-            () => BeginSelectionIfExternal(gesture),
             DispatcherPriority.Send);
     }
 
@@ -117,7 +121,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             || WindowProcessResolver.IsCurrentProcessAt(gesture.Start)
             || _popupPresenter.IsPointOverPopup(gesture.End)
             || WindowProcessResolver.IsCurrentProcessAt(gesture.End)
-            || !WindowProcessResolver.ArePointsInSameExternalProcess(gesture.Start, gesture.End))
+            || !WindowProcessResolver.ArePointsInSameExternalWindow(gesture.Start, gesture.End))
         {
             return;
         }
@@ -138,6 +142,10 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         AppSettings settings,
         RequestLease lease)
     {
+        var performance = _performanceMonitor.Begin(
+            TranslationTrigger.Selection,
+            settings.ProviderId);
+        var outcome = TranslationOutcome.Cancelled;
         try
         {
             if (settings.SelectionDelayMilliseconds > 0)
@@ -145,20 +153,29 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                 await Task.Delay(settings.SelectionDelayMilliseconds, lease.CancellationToken).ConfigureAwait(false);
             }
 
-            var capture = _selectionReader is IContextualSelectionReader contextualReader
-                ? await contextualReader
-                    .TryReadSelectionAsync(
-                        gesture.End,
-                        settings.UseSelectionContext,
-                        lease.CancellationToken)
-                    .WaitAsync(SelectionReadTimeout, lease.CancellationToken)
-                    .ConfigureAwait(false)
-                : await ReadPlainSelectionAsync(
-                        _selectionReader,
-                        gesture.End,
-                        lease.CancellationToken)
-                    .WaitAsync(SelectionReadTimeout, lease.CancellationToken)
-                    .ConfigureAwait(false);
+            var selectionReadStartedAt = Stopwatch.GetTimestamp();
+            SelectionCapture? capture;
+            try
+            {
+                capture = _selectionReader is IContextualSelectionReader contextualReader
+                    ? await contextualReader
+                        .TryReadSelectionAsync(
+                            gesture.End,
+                            settings.UseSelectionContext,
+                            lease.CancellationToken)
+                        .WaitAsync(SelectionReadTimeout, lease.CancellationToken)
+                        .ConfigureAwait(false)
+                    : await ReadPlainSelectionAsync(
+                            _selectionReader,
+                            gesture.End,
+                            lease.CancellationToken)
+                        .WaitAsync(SelectionReadTimeout, lease.CancellationToken)
+                        .ConfigureAwait(false);
+            }
+            finally
+            {
+                performance.MarkSelectionRead(Stopwatch.GetElapsedTime(selectionReadStartedAt));
+            }
             var selectedText = capture?.Text;
             if (string.IsNullOrWhiteSpace(selectedText) || !_requestGate.IsCurrent(lease.Version))
             {
@@ -166,15 +183,17 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             }
 
             var targetLanguage = LanguageDirectionResolver.ResolveTargetLanguage(selectedText, settings);
-            await TranslateResolvedTextAsync(
+            outcome = await TranslateResolvedTextAsync(
                     lease.Version,
                     selectedText,
                     capture?.Context,
+                    settings.SourceLanguage,
                     targetLanguage,
                     gesture.End,
                     settings,
                     lease.CancellationToken,
-                    () => IsSelectionRequestActive(lease.Version))
+                    () => IsSelectionRequestActive(lease.Version),
+                    performance)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (lease.CancellationToken.IsCancellationRequested)
@@ -182,16 +201,19 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
         catch (OperationCanceledException exception)
         {
+            outcome = TranslationOutcome.Failed;
             Debug.WriteLine($"InstantTranslate selection request ended unexpectedly: {exception}");
             await FailPopupIfCurrentAsync(lease.Version, Localize(settings, "The translation ended unexpectedly. Try again.", "翻译请求意外中断，请重试。"));
         }
         catch (TimeoutException)
         {
+            outcome = TranslationOutcome.Failed;
             Debug.WriteLine("InstantTranslate: selection read timed out.");
             await FailPopupIfCurrentAsync(lease.Version, Localize(settings, "Reading the selection timed out. Select the text again.", "读取选中文字超时，请重新选择。"));
         }
         catch (TranslationProviderException exception)
         {
+            outcome = TranslationOutcome.Failed;
             Debug.WriteLine($"InstantTranslate translation provider failed: {exception}");
             if (IsSelectionRequestActive(lease.Version))
             {
@@ -202,11 +224,13 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
         catch (Exception exception)
         {
+            outcome = TranslationOutcome.Failed;
             Debug.WriteLine($"InstantTranslate selection pipeline failed: {exception}");
             await FailPopupIfCurrentAsync(lease.Version, Localize(settings, "Translation failed. Check the network and try again.", "翻译失败，请检查网络后重试。"));
         }
         finally
         {
+            performance.Complete(outcome);
             CompleteSelection(lease.Version);
         }
     }
@@ -217,18 +241,24 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         AppSettings settings,
         RequestLease lease)
     {
+        var performance = _performanceMonitor.Begin(
+            TranslationTrigger.Clipboard,
+            settings.ProviderId);
+        var outcome = TranslationOutcome.Cancelled;
         try
         {
             var targetLanguage = LanguageDirectionResolver.ResolveTargetLanguage(text, settings);
-            await TranslateResolvedTextAsync(
+            outcome = await TranslateResolvedTextAsync(
                     lease.Version,
                     text,
                     context: null,
+                    settings.SourceLanguage,
                     targetLanguage,
                     anchorPoint,
                     settings,
                     lease.CancellationToken,
-                    () => IsSelectionRequestActive(lease.Version))
+                    () => IsSelectionRequestActive(lease.Version),
+                    performance)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (lease.CancellationToken.IsCancellationRequested)
@@ -236,6 +266,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
         catch (TranslationProviderException exception)
         {
+            outcome = TranslationOutcome.Failed;
             Debug.WriteLine($"InstantTranslate explicit translation failed: {exception}");
             if (IsSelectionRequestActive(lease.Version))
             {
@@ -246,11 +277,13 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
         catch (Exception exception)
         {
+            outcome = TranslationOutcome.Failed;
             Debug.WriteLine($"InstantTranslate explicit translation pipeline failed: {exception}");
             await FailPopupIfCurrentAsync(lease.Version, Localize(settings, "Translation failed. Check the network and try again.", "翻译失败，请检查网络后重试。"));
         }
         finally
         {
+            performance.Complete(outcome);
             CompleteSelection(lease.Version);
         }
     }
@@ -283,17 +316,23 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         AppSettings settings,
         CancellationTokenSource cancellation)
     {
+        var performance = _performanceMonitor.Begin(
+            TranslationTrigger.Retranslation,
+            settings.ProviderId);
+        var outcome = TranslationOutcome.Cancelled;
         try
         {
-            await TranslateResolvedTextAsync(
+            outcome = await TranslateResolvedTextAsync(
                     request.RequestId,
                     request.SourceText,
                     context: null,
+                    request.SourceLanguage,
                     request.TargetLanguage,
                     request.AnchorPoint,
                     settings,
                     cancellation.Token,
-                    () => IsCurrentRetranslation(request.RequestId, cancellation))
+                    () => IsCurrentRetranslation(request.RequestId, cancellation),
+                    performance)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -301,6 +340,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
         catch (OperationCanceledException exception)
         {
+            outcome = TranslationOutcome.Failed;
             Debug.WriteLine($"InstantTranslate retranslation ended unexpectedly: {exception}");
             if (IsCurrentRetranslation(request.RequestId, cancellation))
             {
@@ -311,6 +351,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
         catch (TranslationProviderException exception)
         {
+            outcome = TranslationOutcome.Failed;
             Debug.WriteLine($"InstantTranslate retranslation failed: {exception}");
             if (IsCurrentRetranslation(request.RequestId, cancellation))
             {
@@ -323,6 +364,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
         catch (Exception exception)
         {
+            outcome = TranslationOutcome.Failed;
             Debug.WriteLine($"InstantTranslate retranslation pipeline failed: {exception}");
             if (IsCurrentRetranslation(request.RequestId, cancellation))
             {
@@ -333,6 +375,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
         finally
         {
+            performance.Complete(outcome);
             lock (_retranslationSync)
             {
                 if (_retranslations.TryGetValue(request.RequestId, out var current)
@@ -346,15 +389,17 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
     }
 
-    private async Task TranslateResolvedTextAsync(
+    private async Task<TranslationOutcome> TranslateResolvedTextAsync(
         long requestId,
         string sourceText,
         string? context,
+        string sourceLanguage,
         string targetLanguage,
         ScreenPoint anchorPoint,
         AppSettings settings,
         CancellationToken cancellationToken,
-        Func<bool> canPresent)
+        Func<bool> canPresent,
+        TranslationPerformanceOperation performance)
     {
         if (sourceText.Length > settings.MaximumSelectionCharacters)
         {
@@ -371,79 +416,237 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                 },
                 DispatcherPriority.Send,
                 cancellationToken);
-            return;
+            return TranslationOutcome.Failed;
         }
 
-        var preparedOptions = PrepareTranslationOptions(sourceText, settings);
+        performance.MarkTranslationStarted();
+        var savedTranslation = _translationMemoryStore.FindExact(
+            sourceText,
+            sourceLanguage,
+            targetLanguage);
+        if (savedTranslation is not null)
+        {
+            performance.MarkCacheHit();
+            performance.MarkFirstContent();
+            if (!canPresent())
+            {
+                return TranslationOutcome.Cancelled;
+            }
+
+            await _dispatcher.InvokeAsync(
+                () =>
+                {
+                    _popupPresenter.ShowTranslation(
+                        requestId,
+                        sourceText,
+                        savedTranslation.TargetText,
+                        targetLanguage,
+                        anchorPoint,
+                        sourceLanguage);
+                    _popupPresenter.CompleteRequest(requestId);
+                },
+                DispatcherPriority.Send,
+                cancellationToken);
+            return TranslationOutcome.Succeeded;
+        }
+
+        var preparedOptions = PrepareTranslationOptions(
+            sourceText,
+            sourceLanguage,
+            targetLanguage,
+            settings);
         var cacheKey = CreateCacheKey(
             sourceText,
             context,
+            sourceLanguage,
             targetLanguage,
             settings,
             preparedOptions);
         if (_translationCache.TryGet(cacheKey, out var cachedTranslation))
         {
+            performance.MarkCacheHit();
+            performance.MarkFirstContent();
             if (!canPresent())
             {
-                return;
+                return TranslationOutcome.Cancelled;
             }
 
             await _dispatcher.InvokeAsync(
-                () => _popupPresenter.ShowTranslation(
-                    requestId,
-                    sourceText,
-                    cachedTranslation,
-                    targetLanguage,
-                    anchorPoint),
+                () =>
+                {
+                    _popupPresenter.ShowTranslation(
+                        requestId,
+                        sourceText,
+                        cachedTranslation,
+                        targetLanguage,
+                        anchorPoint,
+                        sourceLanguage);
+                    _popupPresenter.CompleteRequest(requestId);
+                },
                 DispatcherPriority.Send,
                 cancellationToken);
-            return;
+            return TranslationOutcome.Succeeded;
         }
 
-        // Do not create a popup until a real selection has been read. Cache hits
-        // skip loading entirely; network requests retain the immediate feedback.
-        await _dispatcher.InvokeAsync(
-            () => _popupPresenter.ShowLoading(requestId, anchorPoint),
-            DispatcherPriority.Send,
-            cancellationToken);
+        while (_inFlightTranslations.TryJoin(cacheKey, out var pendingTranslation)
+               && pendingTranslation is not null)
+        {
+            performance.MarkCoalesced();
+            await _dispatcher.InvokeAsync(
+                () => _popupPresenter.ShowLoading(requestId, anchorPoint),
+                DispatcherPriority.Send,
+                cancellationToken);
+            string sharedTranslation;
+            try
+            {
+                sharedTranslation = await pendingTranslation
+                    .WaitAsync(TranslationTimeout, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // A failed owner must not strand every identical request. Drop
+                // the stale registry entry and let this caller take ownership.
+                _inFlightTranslations.TryRemove(cacheKey, pendingTranslation);
+                continue;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                _inFlightTranslations.TryRemove(cacheKey, pendingTranslation);
+                continue;
+            }
 
-        await StreamTranslationAsync(
-                requestId,
-                sourceText,
-                context,
-                targetLanguage,
-                anchorPoint,
-                settings,
-                preparedOptions,
-                cacheKey,
-                cancellationToken,
-                canPresent)
-            .ConfigureAwait(false);
+            if (!canPresent())
+            {
+                return TranslationOutcome.Cancelled;
+            }
+
+            performance.MarkFirstContent();
+            await _dispatcher.InvokeAsync(
+                () =>
+                {
+                    _popupPresenter.ShowTranslation(
+                        requestId,
+                        sourceText,
+                        sharedTranslation,
+                        targetLanguage,
+                        anchorPoint,
+                        sourceLanguage);
+                    _popupPresenter.CompleteRequest(requestId);
+                },
+                DispatcherPriority.Send,
+                cancellationToken);
+            return TranslationOutcome.Succeeded;
+        }
+
+        var sharedCompletion = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = sharedCompletion.Task.ContinueWith(
+            task => _ = task.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        if (!_inFlightTranslations.TryRegister(cacheKey, sharedCompletion.Task))
+        {
+            return await TranslateResolvedTextAsync(
+                    requestId,
+                    sourceText,
+                    context,
+                    sourceLanguage,
+                    targetLanguage,
+                    anchorPoint,
+                    settings,
+                    cancellationToken,
+                    canPresent,
+                    performance)
+                .ConfigureAwait(false);
+        }
+
+        try
+        {
+            // Do not create a popup until a real selection has been read. Cache hits
+            // skip loading entirely; network requests retain the immediate feedback.
+            await _dispatcher.InvokeAsync(
+                () => _popupPresenter.ShowLoading(requestId, anchorPoint),
+                DispatcherPriority.Send,
+                cancellationToken);
+
+            var translation = await StreamTranslationAsync(
+                    requestId,
+                    sourceText,
+                    context,
+                    sourceLanguage,
+                    targetLanguage,
+                    anchorPoint,
+                    settings,
+                    preparedOptions,
+                    cacheKey,
+                    cancellationToken,
+                    canPresent,
+                    performance)
+                .ConfigureAwait(false);
+            if (translation is null)
+            {
+                sharedCompletion.TrySetCanceled(cancellationToken);
+                if (cancellationToken.IsCancellationRequested || !canPresent())
+                {
+                    return TranslationOutcome.Cancelled;
+                }
+
+                throw new TranslationProviderException(
+                    "DeepSeek 未返回可用的译文内容。",
+                    TranslationFailureKind.Server);
+            }
+
+            sharedCompletion.TrySetResult(translation);
+            await _dispatcher.InvokeAsync(
+                () => _popupPresenter.CompleteRequest(requestId),
+                DispatcherPriority.Send,
+                cancellationToken);
+            return TranslationOutcome.Succeeded;
+        }
+        catch (OperationCanceledException)
+        {
+            sharedCompletion.TrySetCanceled(cancellationToken);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            sharedCompletion.TrySetException(exception);
+            throw;
+        }
+        finally
+        {
+            _inFlightTranslations.TryRemove(cacheKey, sharedCompletion.Task);
+        }
     }
 
-    private async Task StreamTranslationAsync(
+    private async Task<string?> StreamTranslationAsync(
         long requestId,
         string sourceText,
         string? context,
+        string sourceLanguage,
         string targetLanguage,
         ScreenPoint anchorPoint,
         AppSettings settings,
         PreparedTranslationOptions preparedOptions,
         TranslationCacheKey cacheKey,
         CancellationToken cancellationToken,
-        Func<bool> canPresent)
+        Func<bool> canPresent,
+        TranslationPerformanceOperation performance)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TranslationTimeout);
         var request = new TranslationRequest(
             sourceText,
-            settings.SourceLanguage,
+            sourceLanguage,
             targetLanguage,
             context,
             preparedOptions.Mode,
             preparedOptions.Tone,
             PersonalGlossary: string.Empty,
-            ApplicableGlossaryEntries: preparedOptions.ApplicableGlossaryEntries);
+            ApplicableGlossaryEntries: preparedOptions.ApplicableGlossaryEntries,
+            TranslationExamples: preparedOptions.TranslationExamples);
         var translationProvider = _translationProviderFactory.Create(settings);
         var translation = new StringBuilder();
         var updateThrottle = new StreamingUpdateThrottle();
@@ -451,8 +654,10 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
 
         try
         {
+            performance.MarkQueueStarted();
             await _translationConcurrency.WaitAsync(timeout.Token).ConfigureAwait(false);
             enteredConcurrencySlot = true;
+            performance.MarkQueueCompleted();
             await using var enumerator = translationProvider
                 .TranslateAsync(request, timeout.Token)
                 .GetAsyncEnumerator(timeout.Token);
@@ -465,11 +670,15 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                 var chunk = enumerator.Current;
                 if (!canPresent())
                 {
-                    return;
+                    return null;
                 }
 
                 translation.Append(chunk.TextDelta);
-                receivedContent |= chunk.TextDelta.Length > 0;
+                if (!receivedContent && chunk.TextDelta.Length > 0)
+                {
+                    receivedContent = true;
+                    performance.MarkFirstContent();
+                }
                 if (!updateThrottle.ShouldPublish(translation.Length, chunk.IsFinal))
                 {
                     continue;
@@ -482,7 +691,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                         sourceText,
                         currentText,
                         targetLanguage,
-                        anchorPoint),
+                        anchorPoint,
+                        sourceLanguage),
                     DispatcherPriority.Normal,
                     timeout.Token);
             }
@@ -496,24 +706,34 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                         sourceText,
                         finalText,
                         targetLanguage,
-                        anchorPoint),
+                        anchorPoint,
+                        sourceLanguage),
                     DispatcherPriority.Normal,
                     timeout.Token);
             }
 
             if (translation.Length > 0)
             {
-                _translationCache.Set(cacheKey, translation.ToString());
+                var completedTranslation = translation.ToString();
+                _translationCache.Set(cacheKey, completedTranslation);
+                return completedTranslation;
             }
+
+            return null;
         }
         catch (OperationCanceledException)
             when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            throw new TranslationProviderException("DeepSeek 翻译请求超过 60 秒，已取消。");
+            throw new TranslationProviderException(
+                "DeepSeek 翻译请求超过 60 秒，已取消。",
+                TranslationFailureKind.Timeout);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new TranslationProviderException("DeepSeek 翻译请求意外中断，请重试。", exception);
+            throw new TranslationProviderException(
+                "DeepSeek 翻译请求意外中断，请重试。",
+                exception,
+                TranslationFailureKind.Connectivity);
         }
         finally
         {
@@ -544,13 +764,15 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                 receivedContent
                     ? "DeepSeek 流式响应停顿超过 15 秒，已取消。"
                     : "DeepSeek 在 20 秒内未返回首段译文，请检查网络后重试。",
-                exception);
+                exception,
+                TranslationFailureKind.Timeout);
         }
     }
 
     private static TranslationCacheKey CreateCacheKey(
         string sourceText,
         string? context,
+        string sourceLanguage,
         string targetLanguage,
         AppSettings settings,
         PreparedTranslationOptions preparedOptions)
@@ -564,29 +786,43 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             context ?? string.Empty,
             preparedOptions.Mode,
             preparedOptions.Tone,
-            applicableGlossary);
+            applicableGlossary,
+            string.Join(
+                '\u001E',
+                preparedOptions.TranslationExamples.Select(example =>
+                    $"{example.SourceText}\u001D{example.TargetText}")));
         return TranslationCacheKey.Create(
             settings.ProviderId,
             settings.DeepSeekEndpoint,
             settings.DeepSeekModel,
-            settings.SourceLanguage,
+            sourceLanguage,
             targetLanguage,
             sourceText,
             PromptVersion,
             optionsSignature);
     }
 
-    private static PreparedTranslationOptions PrepareTranslationOptions(
+    private PreparedTranslationOptions PrepareTranslationOptions(
         string sourceText,
+        string sourceLanguage,
+        string targetLanguage,
         AppSettings settings)
     {
         var applicableGlossaryEntries = PersonalGlossary.Parse(settings.PersonalGlossary)
             .Where(entry => sourceText.Contains(entry.Source, StringComparison.OrdinalIgnoreCase))
             .ToArray();
+        var translationExamples = _translationMemoryStore
+            .FindRelevant(
+                sourceText,
+                sourceLanguage,
+                targetLanguage)
+            .Select(entry => new TranslationExample(entry.SourceText, entry.TargetText))
+            .ToArray();
         return new PreparedTranslationOptions(
             TranslationPreferenceCatalog.NormalizeMode(settings.TranslationMode),
             TranslationPreferenceCatalog.NormalizeTone(settings.TranslationTone),
-            applicableGlossaryEntries);
+            applicableGlossaryEntries,
+            translationExamples);
     }
 
     private static async Task<SelectionCapture?> ReadPlainSelectionAsync(
@@ -608,7 +844,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     private sealed record PreparedTranslationOptions(
         string Mode,
         string Tone,
-        IReadOnlyList<GlossaryEntry> ApplicableGlossaryEntries);
+        IReadOnlyList<GlossaryEntry> ApplicableGlossaryEntries,
+        IReadOnlyList<TranslationExample> TranslationExamples);
 
     private void OnPopupClosed(long requestId)
     {
@@ -619,6 +856,33 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             {
                 cancellation.Cancel();
             }
+        }
+    }
+
+    private bool OnTranslationCorrectionRequested(PopupTranslationCorrection correction)
+    {
+        try
+        {
+            var settings = _getSettings();
+            _translationMemoryStore.AddOrUpdate(
+                correction.SourceText,
+                correction.CorrectedTranslation,
+                correction.SourceLanguage,
+                correction.TargetLanguage);
+            _translationCache.Clear();
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or System.Security.Cryptography.CryptographicException
+            or ArgumentException)
+        {
+            Debug.WriteLine($"InstantTranslate could not save a translation correction: {exception}");
+            TranslationFailed?.Invoke(Localize(
+                _getSettings(),
+                "Could not save the correction securely.",
+                "无法安全保存修正译文。"));
+            return false;
         }
     }
 
@@ -736,6 +1000,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         _popupPresenter.RetranslateRequested -= OnRetranslateRequested;
         _popupPresenter.PopupClosed -= OnPopupClosed;
         _popupPresenter.PinStateChanged -= OnPopupPinStateChanged;
+        _popupPresenter.TranslationCorrectionRequested -= OnTranslationCorrectionRequested;
         _requestGate.Dispose();
         _translationCache.Clear();
 

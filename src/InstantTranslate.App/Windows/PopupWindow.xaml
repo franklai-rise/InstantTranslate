@@ -16,6 +16,7 @@
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
         SizeChanged="PopupWindow_SizeChanged"
+        PreviewKeyDown="PopupWindow_PreviewKeyDown"
         TextOptions.TextFormattingMode="Display">
     <Window.Resources>
         <Style x:Key="ActionButtonStyle" TargetType="Button">
@@ -27,8 +28,7 @@
             <Setter Property="Foreground" Value="{DynamicResource PopupTextBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Focusable" Value="False" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Focusable" Value="True" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="ToolTipService.InitialShowDelay" Value="320" />
             <Setter Property="ToolTipService.BetweenShowDelay" Value="80" />
@@ -52,9 +52,13 @@
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="ButtonChrome" Property="Background" Value="{DynamicResource AccentLightBrush}" />
                             </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="ButtonChrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="ButtonChrome" Property="BorderThickness" Value="1" />
+                            </Trigger>
                             <Trigger Property="Tag" Value="Pinned">
                                 <Setter TargetName="ButtonChrome" Property="Background" Value="{DynamicResource AccentBrush}" />
-                                <Setter Property="Foreground" Value="White" />
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
                                 <Setter TargetName="ButtonChrome" Property="BorderBrush" Value="Transparent" />
                                 <Setter TargetName="ButtonChrome" Property="BorderThickness" Value="0" />
                             </Trigger>
@@ -87,6 +91,51 @@
             <Setter Property="FontFamily" Value="{DynamicResource InterfaceFont}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="Padding" Value="7,4" />
+        </Style>
+
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="8" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <Track x:Name="PART_Track"
+                                   IsDirectionReversed="True"
+                                   Focusable="False">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static ScrollBar.PageUpCommand}"
+                                                  Opacity="0" />
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static ScrollBar.PageDownCommand}"
+                                                  Opacity="0" />
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb MinHeight="24">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Margin="2,1"
+                                                        Background="{DynamicResource PopupButtonBorderBrush}"
+                                                        CornerRadius="2" />
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Orientation" Value="Horizontal">
+                                <Setter Property="Height" Value="8" />
+                                <Setter Property="Width" Value="Auto" />
+                                <Setter TargetName="PART_Track"
+                                        Property="IsDirectionReversed"
+                                        Value="False" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <ControlTemplate x:Key="SliderTrackTemplate" TargetType="RepeatButton">
@@ -210,7 +259,7 @@
                     <Slider x:Name="FontSizeSlider"
                             Width="82"
                             Minimum="12"
-                            Maximum="30"
+                            Maximum="34"
                             Value="16.5"
                             SmallChange="0.5"
                             LargeChange="2"
@@ -261,6 +310,32 @@
                                 Click="CopyTranslationButton_Click" />
                     </StackPanel>
                 </Border>
+                <Button x:Name="EditTranslationButton"
+                        Style="{StaticResource ActionButtonStyle}"
+                        ToolTip="Edit and save correction"
+                        Click="EditTranslationButton_Click">
+                    <Grid Width="24" Height="24">
+                        <Viewbox x:Name="EditTranslationIcon" Width="20" Height="20">
+                            <Canvas Width="24" Height="24">
+                                <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      Data="M4,17.25V21H7.75L18.81,9.94L15.06,6.19L4,17.25ZM21.71,7.04C22.1,6.65 22.1,6 21.71,5.63L19.37,3.29C19,2.9 18.35,2.9 17.96,3.29L16.13,5.12L19.88,8.87L21.71,7.04Z" />
+                            </Canvas>
+                        </Viewbox>
+                        <Viewbox x:Name="SaveCorrectionIcon"
+                                 Width="20"
+                                 Height="20"
+                                 Visibility="Collapsed">
+                            <Canvas Width="24" Height="24">
+                                <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="2.2"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round"
+                                      Data="M5,12.5 L9.5,17 L19,7" />
+                            </Canvas>
+                        </Viewbox>
+                    </Grid>
+                </Button>
                 <Button x:Name="PinButton"
                         Style="{StaticResource ActionButtonStyle}"
                         ToolTip="Keep window"
@@ -337,6 +412,7 @@
                              Focusable="True"
                              Cursor="IBeam"
                              SelectionBrush="{DynamicResource AccentLightBrush}"
+                             SelectionTextBrush="{DynamicResource AccentTextBrush}"
                              SelectionOpacity="0.42"
                              VerticalScrollBarVisibility="Auto"
                              HorizontalScrollBarVisibility="Disabled"

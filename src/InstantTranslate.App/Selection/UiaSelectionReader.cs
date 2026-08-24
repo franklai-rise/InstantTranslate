@@ -1,7 +1,10 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
 using InstantTranslate.Models;
+using InstantTranslate.Interop;
+using InstantTranslate.Services;
 
 namespace InstantTranslate.Selection;
 
@@ -10,6 +13,45 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
     private const int MaximumTextLength = 20_000;
     private const int MaximumContextLength = 3000;
     private const int MaximumAncestorDepth = 10;
+    private const int MaximumConcurrentReads = 2;
+    private readonly SemaphoreSlim _readSlots = new(MaximumConcurrentReads, MaximumConcurrentReads);
+    private readonly ConcurrentDictionary<uint, byte> _activeTargetProcesses = new();
+    private readonly Func<ScreenPoint, bool, CancellationToken, SelectionCapture?> _readSelection;
+    private readonly Func<ScreenPoint, uint?> _getTargetProcessId;
+    private int _activeReadCount;
+    private long _rejectedReadCount;
+
+    public UiaSelectionReader()
+        : this(ReadSelection, WindowProcessResolver.TryGetExternalProcessIdAt)
+    {
+    }
+
+    internal UiaSelectionReader(
+        Func<ScreenPoint, bool, CancellationToken, SelectionCapture?> readSelection,
+        Func<ScreenPoint, uint?>? getTargetProcessId = null)
+    {
+        _readSelection = readSelection ?? throw new ArgumentNullException(nameof(readSelection));
+        _getTargetProcessId = getTargetProcessId ?? (_ => null);
+    }
+
+    internal int ActiveReadCount => Volatile.Read(ref _activeReadCount);
+
+    internal long RejectedReadCount => Interlocked.Read(ref _rejectedReadCount);
+
+    public string CreateStatusReport(bool useChinese)
+    {
+        return useChinese
+            ? string.Join(
+                Environment.NewLine,
+                "UI Automation 取词状态",
+                $"正在读取：{ActiveReadCount}/{MaximumConcurrentReads}",
+                $"为避免卡死已跳过：{RejectedReadCount}")
+            : string.Join(
+                Environment.NewLine,
+                "UI Automation selection status",
+                $"Active reads: {ActiveReadCount}/{MaximumConcurrentReads}",
+                $"Skipped to avoid blocking: {RejectedReadCount}");
+    }
 
     public async Task<string?> TryReadSelectedTextAsync(ScreenPoint point, CancellationToken cancellationToken)
     {
@@ -23,7 +65,156 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
         bool includeContext,
         CancellationToken cancellationToken)
     {
-        return Task.Run(() => ReadSelection(point, includeContext, cancellationToken), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var targetProcessId = _getTargetProcessId(point);
+        if (targetProcessId is { } processId
+            && !_activeTargetProcesses.TryAdd(processId, 0))
+        {
+            Interlocked.Increment(ref _rejectedReadCount);
+            return Task.FromResult<SelectionCapture?>(null);
+        }
+
+        // UI Automation providers run in other processes. A broken provider can
+        // remain blocked even after the caller's timeout expires, because COM
+        // calls cannot be cancelled safely from managed code. Bound the number
+        // of physical reads so repeated selections in such an application never
+        // consume an unbounded number of ThreadPool threads. One remaining slot
+        // still allows another healthy application to recover automatically.
+        if (!_readSlots.Wait(0))
+        {
+            if (targetProcessId is { } rejectedProcessId)
+            {
+                _activeTargetProcesses.TryRemove(rejectedProcessId, out _);
+            }
+
+            Interlocked.Increment(ref _rejectedReadCount);
+            return Task.FromResult<SelectionCapture?>(null);
+        }
+
+        Interlocked.Increment(ref _activeReadCount);
+        var completion = new TaskCompletionSource<SelectionCapture?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var readThread = new Thread(
+                () => ExecutePhysicalRead(
+                    point,
+                    includeContext,
+                    targetProcessId,
+                    cancellationToken,
+                    completion))
+            {
+                IsBackground = true,
+                Name = "InstantTranslate.UIAutomationRead",
+            };
+            readThread.Start();
+        }
+        catch
+        {
+            if (targetProcessId is { } failedProcessId)
+            {
+                _activeTargetProcesses.TryRemove(failedProcessId, out _);
+            }
+
+            Interlocked.Decrement(ref _activeReadCount);
+            _readSlots.Release();
+            throw;
+        }
+
+        var readTask = completion.Task;
+
+        // WaitAsync cancellation deliberately does not release the physical-read
+        // slot. The slot belongs to the underlying COM operation and is released
+        // only when that operation actually ends. The worker also requests COM
+        // call cancellation as a best effort so a responsive provider can unwind.
+        ObserveFault(readTask);
+        return readTask.WaitAsync(cancellationToken);
+    }
+
+    private void ExecutePhysicalRead(
+        ScreenPoint point,
+        bool includeContext,
+        uint? targetProcessId,
+        CancellationToken cancellationToken,
+        TaskCompletionSource<SelectionCapture?> completion)
+    {
+        var coInitializeResult = NativeMethods.CoInitializeEx(
+            IntPtr.Zero,
+            NativeMethods.CoInitMultithreaded);
+        var shouldUninitializeCom = coInitializeResult >= 0;
+        var cancellationEnabled = coInitializeResult >= 0
+                                  && NativeMethods.CoEnableCallCancellation(IntPtr.Zero) >= 0;
+        CancellationTokenRegistration cancellationRegistration = default;
+        SelectionCapture? result = null;
+        Exception? failure = null;
+        try
+        {
+            if (cancellationEnabled)
+            {
+                var threadId = NativeMethods.GetCurrentThreadId();
+                cancellationRegistration = cancellationToken.UnsafeRegister(
+                    static state =>
+                    {
+                        var targetThreadId = (uint)state!;
+                        _ = NativeMethods.CoCancelCall(targetThreadId, 0);
+                    },
+                    threadId);
+            }
+
+            result = _readSelection(point, includeContext, cancellationToken);
+        }
+        catch (OperationCanceledException exception)
+        {
+            failure = exception;
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+        finally
+        {
+            cancellationRegistration.Dispose();
+            if (cancellationEnabled)
+            {
+                _ = NativeMethods.CoDisableCallCancellation(IntPtr.Zero);
+            }
+
+            if (shouldUninitializeCom)
+            {
+                NativeMethods.CoUninitialize();
+            }
+
+            if (targetProcessId is { } processId)
+            {
+                _activeTargetProcesses.TryRemove(processId, out _);
+            }
+
+            Interlocked.Decrement(ref _activeReadCount);
+            _readSlots.Release();
+        }
+
+        if (failure is OperationCanceledException canceled)
+        {
+            completion.TrySetCanceled(canceled.CancellationToken);
+        }
+        else if (failure is not null)
+        {
+            completion.TrySetException(failure);
+        }
+        else
+        {
+            completion.TrySetResult(result);
+        }
+    }
+
+    private static void ObserveFault(Task<SelectionCapture?> task)
+    {
+        _ = task.ContinueWith(
+            static completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private static SelectionCapture? ReadSelection(
@@ -47,6 +238,7 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
     private static IEnumerable<AutomationElement> GetCandidateElements(ScreenPoint point)
     {
         var seenRuntimeIds = new HashSet<string>(StringComparer.Ordinal);
+        var expectedRootOwner = GetRootOwnerAt(point);
         AutomationElement? hitElement = null;
         AutomationElement? focusedElement = null;
 
@@ -61,7 +253,7 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
         {
         }
 
-        if (TryIsPassword(hitElement))
+        if (IsPasswordOrUnknown(hitElement))
         {
             yield break;
         }
@@ -72,7 +264,9 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
             try
             {
                 var candidate = AutomationElement.FocusedElement;
-                if (ShouldIncludeFocusedElement(hitProcessId, TryGetProcessId(candidate)))
+                if (ShouldIncludeFocusedElement(hitProcessId, TryGetProcessId(candidate))
+                    && expectedRootOwner != IntPtr.Zero
+                    && TryGetRootOwnerHandle(candidate) == expectedRootOwner)
                 {
                     focusedElement = candidate;
                 }
@@ -87,26 +281,12 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
 
         foreach (var root in new[] { hitElement, focusedElement })
         {
-            var current = root;
-            for (var depth = 0; current is not null && depth < MaximumAncestorDepth; depth++)
+            foreach (var current in GetSafeCandidatePath(root))
             {
                 var identity = TryGetIdentity(current);
                 if (identity is null || seenRuntimeIds.Add(identity))
                 {
                     yield return current;
-                }
-
-                try
-                {
-                    current = TreeWalker.ControlViewWalker.GetParent(current);
-                }
-                catch (ElementNotAvailableException)
-                {
-                    break;
-                }
-                catch (COMException)
-                {
-                    break;
                 }
             }
         }
@@ -117,7 +297,39 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
         return hitProcessId is > 0 && hitProcessId == focusedProcessId;
     }
 
-    private static bool TryIsPassword(AutomationElement? element)
+    private static IReadOnlyList<AutomationElement> GetSafeCandidatePath(AutomationElement? root)
+    {
+        var path = new List<AutomationElement>(MaximumAncestorDepth);
+        var current = root;
+        for (var depth = 0; current is not null && depth < MaximumAncestorDepth; depth++)
+        {
+            // Check the complete path before yielding any node. This prevents a
+            // child of a password control from leaking its selection before the
+            // protected ancestor is discovered.
+            if (IsPasswordOrUnknown(current))
+            {
+                return Array.Empty<AutomationElement>();
+            }
+
+            path.Add(current);
+            try
+            {
+                current = TreeWalker.ControlViewWalker.GetParent(current);
+            }
+            catch (ElementNotAvailableException)
+            {
+                break;
+            }
+            catch (COMException)
+            {
+                return Array.Empty<AutomationElement>();
+            }
+        }
+
+        return path;
+    }
+
+    private static bool IsPasswordOrUnknown(AutomationElement? element)
     {
         if (element is null)
         {
@@ -130,16 +342,68 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
         }
         catch (ElementNotAvailableException)
         {
-            return false;
+            return true;
         }
         catch (InvalidOperationException)
         {
-            return false;
+            return true;
         }
         catch (COMException)
         {
-            return false;
+            return true;
         }
+    }
+
+    private static IntPtr GetRootOwnerAt(ScreenPoint point)
+    {
+        var windowHandle = NativeMethods.WindowFromPoint(new NativeMethods.NativePoint
+        {
+            X = point.X,
+            Y = point.Y,
+        });
+        return windowHandle == IntPtr.Zero
+            ? IntPtr.Zero
+            : GetRootOwner(windowHandle);
+    }
+
+    private static IntPtr TryGetRootOwnerHandle(AutomationElement? element)
+    {
+        var current = element;
+        for (var depth = 0; current is not null && depth < MaximumAncestorDepth; depth++)
+        {
+            try
+            {
+                var windowHandle = new IntPtr(current.Current.NativeWindowHandle);
+                if (windowHandle != IntPtr.Zero)
+                {
+                    return GetRootOwner(windowHandle);
+                }
+
+                current = TreeWalker.ControlViewWalker.GetParent(current);
+            }
+            catch (ElementNotAvailableException)
+            {
+                return IntPtr.Zero;
+            }
+            catch (InvalidOperationException)
+            {
+                return IntPtr.Zero;
+            }
+            catch (COMException)
+            {
+                return IntPtr.Zero;
+            }
+        }
+
+        return IntPtr.Zero;
+    }
+
+    private static IntPtr GetRootOwner(IntPtr windowHandle)
+    {
+        var rootOwner = NativeMethods.GetAncestor(windowHandle, NativeMethods.GaRootOwner);
+        return rootOwner != IntPtr.Zero
+            ? rootOwner
+            : NativeMethods.GetAncestor(windowHandle, NativeMethods.GaRoot);
     }
 
     private static int? TryGetProcessId(AutomationElement? element)

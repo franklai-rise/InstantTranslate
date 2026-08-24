@@ -1,6 +1,15 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '0.4.1'
+    [string]$Version = '0.5.4',
+
+    [string]$CertificateThumbprint = '',
+
+    [ValidateSet('CurrentUser', 'LocalMachine')]
+    [string]$CertificateStoreLocation = 'CurrentUser',
+
+    [string]$TimestampUrl = 'http://timestamp.digicert.com',
+
+    [string]$SignToolPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,6 +20,89 @@ function Assert-LastExitCode {
     if ($LASTEXITCODE -ne 0) {
         throw "$Operation failed with exit code $LASTEXITCODE."
     }
+}
+
+function Resolve-SignTool {
+    param([string]$ExplicitPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        $resolvedPath = (Resolve-Path -LiteralPath $ExplicitPath).Path
+        if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
+            throw "SignTool was not found at '$resolvedPath'."
+        }
+
+        return $resolvedPath
+    }
+
+    $command = Get-Command 'signtool.exe' -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+
+    $programFilesX86 = ${env:ProgramFiles(x86)}
+    if (-not [string]::IsNullOrWhiteSpace($programFilesX86)) {
+        $sdkBin = Join-Path $programFilesX86 'Windows Kits\10\bin'
+        if (Test-Path -LiteralPath $sdkBin -PathType Container) {
+            $candidate = Get-ChildItem -LiteralPath $sdkBin -Directory |
+                Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName 'x64\signtool.exe' } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+                Select-Object -First 1
+            if ($null -ne $candidate) {
+                return $candidate
+            }
+        }
+    }
+
+    throw 'SignTool was not found. Install the Windows SDK or pass -SignToolPath.'
+}
+
+function Invoke-CodeSigning {
+    param(
+        [string]$ExecutablePath,
+        [string]$Thumbprint,
+        [string]$StoreLocation,
+        [string]$TimestampServer,
+        [string]$ToolPath
+    )
+
+    $normalizedThumbprint = $Thumbprint -replace '\s', ''
+    if ($normalizedThumbprint -notmatch '^[A-Fa-f0-9]{40}$') {
+        throw 'CertificateThumbprint must be a 40-character SHA-1 certificate thumbprint.'
+    }
+
+    $certificatePath = "Cert:\$StoreLocation\My\$normalizedThumbprint"
+    if (-not (Test-Path -LiteralPath $certificatePath -PathType Leaf)) {
+        throw "The signing certificate was not found at '$certificatePath'."
+    }
+
+    $certificate = Get-Item -LiteralPath $certificatePath
+    if (-not $certificate.HasPrivateKey) {
+        throw 'The signing certificate does not have an accessible private key.'
+    }
+    if ($certificate.NotAfter -le (Get-Date)) {
+        throw 'The signing certificate has expired.'
+    }
+
+    $resolvedSignTool = Resolve-SignTool -ExplicitPath $ToolPath
+    $signArguments = @(
+        'sign',
+        '/sha1', $normalizedThumbprint,
+        '/s', 'My',
+        '/fd', 'SHA256'
+    )
+    if ($StoreLocation -eq 'LocalMachine') {
+        $signArguments += '/sm'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TimestampServer)) {
+        $signArguments += @('/tr', $TimestampServer, '/td', 'SHA256')
+    }
+    $signArguments += $ExecutablePath
+
+    & $resolvedSignTool @signArguments
+    Assert-LastExitCode 'Authenticode signing'
+    & $resolvedSignTool verify /pa /all $ExecutablePath
+    Assert-LastExitCode 'Authenticode verification'
 }
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -92,13 +184,27 @@ try {
         throw 'Published executable was not created.'
     }
 
-    foreach ($smokeArgument in @('--smoke-test', '--popup-smoke-test')) {
+    if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+        Invoke-CodeSigning `
+            -ExecutablePath $publishedExecutable `
+            -Thumbprint $CertificateThumbprint `
+            -StoreLocation $CertificateStoreLocation `
+            -TimestampServer $TimestampUrl `
+            -ToolPath $SignToolPath
+        Write-Output "Signature: Authenticode ($CertificateStoreLocation)"
+    }
+    else {
+        Write-Output 'Signature: unsigned (no certificate thumbprint supplied)'
+    }
+
+    foreach ($smokeArgument in @('--smoke-test', '--popup-smoke-test', '--settings-lifecycle-test')) {
         $smokeProcess = Start-Process `
             -FilePath $publishedExecutable `
             -ArgumentList $smokeArgument `
             -PassThru `
             -WindowStyle Hidden
-        if (-not $smokeProcess.WaitForExit(15000)) {
+        $smokeTimeoutMilliseconds = if ($smokeArgument -eq '--settings-lifecycle-test') { 60000 } else { 15000 }
+        if (-not $smokeProcess.WaitForExit($smokeTimeoutMilliseconds)) {
             $smokeProcess.Kill($true)
             throw "Published executable $smokeArgument timed out."
         }

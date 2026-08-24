@@ -10,7 +10,10 @@ internal sealed record TranslationRequest(
     string Mode = TranslationPreferenceCatalog.DefaultModeId,
     string Tone = TranslationPreferenceCatalog.DefaultToneId,
     string PersonalGlossary = "",
-    IReadOnlyList<GlossaryEntry>? ApplicableGlossaryEntries = null);
+    IReadOnlyList<GlossaryEntry>? ApplicableGlossaryEntries = null,
+    IReadOnlyList<TranslationExample>? TranslationExamples = null);
+
+internal sealed record TranslationExample(string SourceText, string TargetText);
 
 internal sealed record TranslationChunk(string TextDelta, bool IsFinal = false);
 
@@ -52,15 +55,52 @@ internal sealed record OpenAiCompatibleProviderOptions(
     }
 }
 
+internal enum TranslationFailureKind
+{
+    Unknown,
+    Configuration,
+    Authentication,
+    InvalidRequest,
+    Connectivity,
+    Timeout,
+    RateLimit,
+    Server,
+    Protocol,
+}
+
 internal sealed class TranslationProviderException : Exception
 {
+    public TranslationFailureKind Kind { get; }
+
+    public bool IsTransient => Kind is TranslationFailureKind.Connectivity
+        or TranslationFailureKind.Timeout
+        or TranslationFailureKind.RateLimit
+        or TranslationFailureKind.Server;
+
     public TranslationProviderException(string message)
-        : base(message)
+        : this(message, TranslationFailureKind.Unknown)
     {
     }
 
+    public TranslationProviderException(
+        string message,
+        TranslationFailureKind kind)
+        : base(message)
+    {
+        Kind = kind;
+    }
+
     public TranslationProviderException(string message, Exception innerException)
+        : this(message, innerException, TranslationFailureKind.Unknown)
+    {
+    }
+
+    public TranslationProviderException(
+        string message,
+        Exception innerException,
+        TranslationFailureKind kind)
         : base(message, innerException)
     {
+        Kind = kind;
     }
 }
