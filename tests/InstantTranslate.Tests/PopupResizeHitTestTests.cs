@@ -30,6 +30,21 @@ public sealed class PopupResizeHitTestTests
     }
 
     [Theory]
+    [InlineData(300, 200, NativeMethods.HtClient)]
+    [InlineData(100, 200, NativeMethods.HtLeft)]
+    [InlineData(499, 200, NativeMethods.HtRight)]
+    [InlineData(300, 260, NativeMethods.HtTop)]
+    [InlineData(100, 260, NativeMethods.HtTopLeft)]
+    [InlineData(499, 260, NativeMethods.HtTopRight)]
+    [InlineData(300, 449, NativeMethods.HtBottom)]
+    public void ResolveWithInsetTop_MovesTopResizeEdgeBelowToolbar(int x, int y, int expected)
+    {
+        Assert.Equal(
+            expected,
+            PopupResizeHitTest.ResolveWithInsetTop(Bounds, insetTop: 260, new ScreenPoint(x, y), 8));
+    }
+
+    [Theory]
     [InlineData(-10, -20)]
     [InlineData(32000, 16000)]
     public void DecodeScreenPoint_PreservesSignedCoordinates(int x, int y)

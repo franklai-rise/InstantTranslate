@@ -81,6 +81,9 @@ internal partial class SettingsWindow : Window
     private string? _connectionStatusLocalizationKey;
     private readonly Func<int>? _getTranslationMemoryCount;
     private readonly Action? _clearTranslationMemory;
+    private CancellationTokenSource? _connectionTestCancellation;
+    private bool _isClosed;
+    private bool _apiKeyClearRequested;
 
     public SettingsWindow(
         AppSettings settings,
@@ -128,6 +131,19 @@ internal partial class SettingsWindow : Window
     }
 
     public AppSettings? ResultSettings { get; private set; }
+
+    public bool ApiKeyClearRequested => _apiKeyClearRequested;
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _isClosed = true;
+        _connectionTestCancellation?.Cancel();
+        ApiKeyPasswordBox.Clear();
+        DataContext = null;
+        Content = null;
+        Resources.Clear();
+        base.OnClosed(e);
+    }
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
@@ -185,7 +201,7 @@ internal partial class SettingsWindow : Window
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (string.IsNullOrWhiteSpace(apiKey) && !_apiKeyClearRequested)
             {
                 WpfMessageBox.Show(this, L("ApiKeyEmptyError"), L("InvalidSettings"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 ApiKeyPasswordBox.Focus();
@@ -536,6 +552,10 @@ internal partial class SettingsWindow : Window
 
         TestConnectionButton.IsEnabled = false;
         SetLocalizedConnectionStatus("Connecting", "AppMutedTextBrush");
+        _connectionTestCancellation?.Cancel();
+        _connectionTestCancellation?.Dispose();
+        var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        _connectionTestCancellation = timeout;
         try
         {
             using var factory = new TranslationProviderFactory();
@@ -551,7 +571,6 @@ internal partial class SettingsWindow : Window
                     ReadComboText(TranslationToneComboBox)),
                 PersonalGlossary = PersonalGlossaryTextBox.Text.Trim(),
             });
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             var receivedText = false;
             await foreach (var chunk in provider.TranslateAsync(
                                new TranslationRequest(
@@ -572,6 +591,11 @@ internal partial class SettingsWindow : Window
                 }
             }
 
+            if (_isClosed)
+            {
+                return;
+            }
+
             if (!receivedText)
             {
                 throw new TranslationProviderException(L("NoTestTranslation"));
@@ -581,10 +605,18 @@ internal partial class SettingsWindow : Window
         }
         catch (OperationCanceledException)
         {
-            SetLocalizedConnectionStatus("ConnectionTimeout", "DangerBrush");
+            if (!_isClosed)
+            {
+                SetLocalizedConnectionStatus("ConnectionTimeout", "DangerBrush");
+            }
         }
         catch (TranslationProviderException exception)
         {
+            if (_isClosed)
+            {
+                return;
+            }
+
             var message = UiLanguageCatalog.LocalizeProviderError(_uiLanguage, exception.Message);
             SetConnectionStatus(
                 message.Length <= 58 ? message : message[..58] + "…",
@@ -592,6 +624,11 @@ internal partial class SettingsWindow : Window
         }
         catch (Exception)
         {
+            if (_isClosed)
+            {
+                return;
+            }
+
             SetConnectionStatus(
                 _uiLanguage == UiLanguageCatalog.SimplifiedChineseLanguageId
                     ? "连接失败，请检查配置"
@@ -600,12 +637,22 @@ internal partial class SettingsWindow : Window
         }
         finally
         {
-            TestConnectionButton.IsEnabled = true;
+            if (ReferenceEquals(_connectionTestCancellation, timeout))
+            {
+                _connectionTestCancellation = null;
+            }
+
+            timeout.Dispose();
+            if (!_isClosed)
+            {
+                TestConnectionButton.IsEnabled = true;
+            }
         }
     }
 
     private void ClearApiKeyButton_Click(object sender, RoutedEventArgs e)
     {
+        _apiKeyClearRequested = true;
         ApiKeyPasswordBox.Clear();
         SetLocalizedConnectionStatus("DeleteAfterSave", "AppMutedTextBrush");
         ApiKeyPasswordBox.Focus();

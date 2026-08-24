@@ -83,13 +83,19 @@ internal static class UiLanguageCatalog
                 "The DeepSeek API key is not configured. Open Settings from the tray.",
             _ when value.Contains("无法连接 DeepSeek API", StringComparison.Ordinal) =>
                 "Could not connect to DeepSeek. Check the network and API endpoint.",
+            _ when value.Contains("连接 DeepSeek API 超时", StringComparison.Ordinal) =>
+                "The DeepSeek connection timed out. Check the network or VPN.",
             _ when value.Contains("连续网络故障暂时暂停", StringComparison.Ordinal) =>
                 "DeepSeek is temporarily paused after repeated network failures. Wait a few seconds and try again.",
             _ when value.Contains("非流式响应", StringComparison.Ordinal) =>
                 "DeepSeek returned a non-streaming response. Check the endpoint and model.",
             _ when value.Contains("未返回译文", StringComparison.Ordinal)
-                || value.Contains("未收到译文", StringComparison.Ordinal) =>
+                || value.Contains("未收到译文", StringComparison.Ordinal)
+                || value.Contains("未返回可用的译文", StringComparison.Ordinal) =>
                 "DeepSeek returned no translated text.",
+            _ when value.Contains("流式连接中断", StringComparison.Ordinal)
+                || value.Contains("无法读取 DeepSeek 流式响应", StringComparison.Ordinal) =>
+                "The DeepSeek stream was interrupted. Check the network or VPN and try again.",
             _ when value.Contains("无法解析的流式数据", StringComparison.Ordinal) =>
                 "DeepSeek returned invalid streaming data.",
             _ when value.Contains("超过 60 秒", StringComparison.Ordinal) =>

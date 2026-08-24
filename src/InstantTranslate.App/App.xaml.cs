@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using InstantTranslate.Hooks;
 using InstantTranslate.Interop;
 using InstantTranslate.Models;
@@ -19,12 +20,15 @@ namespace InstantTranslate;
 
 public partial class App : System.Windows.Application
 {
+    private static readonly TimeSpan PeriodicMouseHookRebindInterval = TimeSpan.FromMinutes(15);
     private readonly SettingsStore _settingsStore = new(new WindowsCredentialStore());
     private readonly StartupRegistration _startupRegistration = new();
     private readonly TranslationPerformanceMonitor _performanceMonitor = new();
     private readonly TranslationMemoryStore _translationMemoryStore = new();
+    private readonly RuntimeHealthJournal _healthJournal = new();
     private volatile AppSettings _settings = AppSettings.Default;
     private GlobalMouseHook? _mouseHook;
+    private UiaSelectionReader? _uiaSelectionReader;
     private GlobalHotkeyManager? _hotkeyManager;
     private SelectionTranslationCoordinator? _coordinator;
     private TranslationProviderFactory? _translationProviderFactory;
@@ -33,25 +37,45 @@ public partial class App : System.Windows.Application
     private SingleInstanceCoordinator? _singleInstance;
     private SettingsWindow? _settingsWindow;
     private DispatcherTimer? _smokeTestTimer;
+    private DispatcherTimer? _mouseHookRecoveryTimer;
+    private DispatcherTimer? _credentialRecoveryTimer;
     private bool _isExiting;
+    private bool _isMouseHookRecoveryInProgress;
+    private bool _isCredentialRecoveryInProgress;
+    private int _mouseHookRecoveryFailures;
+    private int _credentialRecoveryFailures;
+    private int _settingsRevision;
     private bool _isSystemParametersSubscribed;
+    private bool _isSessionEventsSubscribed;
+    private bool _isRuntimeDiagnosticsSubscribed;
     private int _exitCode;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        SubscribeRuntimeDiagnostics();
+        _healthJournal.Record(RuntimeHealthEvent.AppStarted);
 
         var isPopupSmokeTest = e.Args.Contains("--popup-smoke-test", StringComparer.OrdinalIgnoreCase);
         var isSmokeTest = e.Args.Contains("--smoke-test", StringComparer.OrdinalIgnoreCase);
         var isPopupSnapshotTest = e.Args.Contains("--popup-snapshot-test", StringComparer.OrdinalIgnoreCase);
         var isSettingsSnapshotTest = e.Args.Contains("--settings-snapshot-test", StringComparer.OrdinalIgnoreCase);
-        var isVisualTest = isPopupSmokeTest || isSmokeTest || isPopupSnapshotTest || isSettingsSnapshotTest;
+        var isSettingsLifecycleTest = e.Args.Contains("--settings-lifecycle-test", StringComparer.OrdinalIgnoreCase);
+        var isVisualTest = isPopupSmokeTest
+                           || isSmokeTest
+                           || isPopupSnapshotTest
+                           || isSettingsSnapshotTest
+                           || isSettingsLifecycleTest;
         if (!isVisualTest)
         {
-            _singleInstance = SingleInstanceCoordinator.Acquire();
+            _singleInstance = SingleInstanceCoordinator.AcquireWithTakeoverRetry();
             if (!_singleInstance.IsPrimary)
             {
+                _healthJournal.Record(
+                    _singleInstance.WasActivationAcknowledged
+                        ? RuntimeHealthEvent.SecondaryInstanceExited
+                        : RuntimeHealthEvent.PrimaryInstanceUnresponsive);
                 _singleInstance.Dispose();
                 _singleInstance = null;
                 Shutdown(0);
@@ -59,10 +83,21 @@ public partial class App : System.Windows.Application
             }
         }
 
-        _settings = _settingsStore.Load();
+        // Reading Windows Credential Manager can be slow while the interactive
+        // desktop is still starting. Load ordinary preferences synchronously,
+        // then recover the secret off the UI thread after tray/input are live.
+        _settings = _settingsStore.LoadPreferences();
+        if (_settingsStore.SettingsReadFailed)
+        {
+            _healthJournal.Record(RuntimeHealthEvent.SettingsReadFailed);
+        }
         ThemeManager.Apply(_settings);
         SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
         _isSystemParametersSubscribed = true;
+        if (!isVisualTest)
+        {
+            TrySubscribeSessionEvents();
+        }
 
         // Visual review modes render only our own WPF windows. They deliberately
         // skip global hooks, hotkeys, tray integration, and startup registration.
@@ -84,22 +119,30 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        if (isSettingsLifecycleTest)
+        {
+            _ = RunSettingsLifecycleTestAsync();
+            return;
+        }
+
         try
         {
             _popupManager = CreatePopupManager();
             _mouseHook = new GlobalMouseHook();
+            _mouseHook.HookStoppedUnexpectedly += OnMouseHookStoppedUnexpectedly;
             _translationProviderFactory = new TranslationProviderFactory();
+            _uiaSelectionReader = new UiaSelectionReader();
             _coordinator = new SelectionTranslationCoordinator(
                 _mouseHook,
                 new SelectionReaderPipeline(
-                    new UiaSelectionReader(),
+                    _uiaSelectionReader,
                     new NativeSelectionReader(),
                     new ClipboardSelectionReader(Dispatcher, WindowProcessResolver.IsClipboardFallbackAllowedAt),
                     () => _settings.UseClipboardFallback),
                 _translationProviderFactory,
                 _popupManager,
                 Dispatcher,
-                () => _settings,
+                GetSettingsSnapshot,
                 _performanceMonitor,
                 _translationMemoryStore);
             _coordinator.TranslationFailed += OnTranslationFailed;
@@ -109,19 +152,24 @@ public partial class App : System.Windows.Application
             _trayIcon.EnabledChanged += SetEnabled;
             _trayIcon.TranslateClipboardRequested += TranslateClipboard;
             _trayIcon.DiagnosticsRequested += CopyPerformanceDiagnostics;
+            _trayIcon.RestartInputCaptureRequested += RepairInputCapture;
             _trayIcon.AboutRequested += ShowAbout;
             _trayIcon.ExitRequested += ExitApplication;
 
             _hotkeyManager = new GlobalHotkeyManager();
             _hotkeyManager.TranslateClipboardRequested += TranslateClipboard;
+            _hotkeyManager.HotkeyStoppedUnexpectedly += OnHotkeyStoppedUnexpectedly;
             try
             {
                 _hotkeyManager.Start();
+                _healthJournal.Record(RuntimeHealthEvent.HotkeyStarted);
             }
             catch (Exception exception)
             {
+                _healthJournal.Record(RuntimeHealthEvent.HotkeyRegistrationFailed, exception);
                 System.Diagnostics.Debug.WriteLine($"InstantTranslate hotkey registration failed: {exception}");
                 _hotkeyManager.TranslateClipboardRequested -= TranslateClipboard;
+                _hotkeyManager.HotkeyStoppedUnexpectedly -= OnHotkeyStoppedUnexpectedly;
                 _hotkeyManager.Dispose();
                 _hotkeyManager = null;
                 _trayIcon.ShowError(L(
@@ -131,12 +179,11 @@ public partial class App : System.Windows.Application
 
             if (!isVisualTest)
             {
-                TryApplyStartupSetting();
                 _singleInstance?.StartListening(
                     () => Dispatcher.BeginInvoke(ShowSettings, DispatcherPriority.Send));
             }
 
-            _mouseHook.Start();
+            StartMouseHookWithRecovery();
 
             if (isPopupSmokeTest)
             {
@@ -151,13 +198,15 @@ public partial class App : System.Windows.Application
                 _smokeTestTimer.Tick += SmokeTestTimer_Tick;
                 _smokeTestTimer.Start();
             }
-            else if (_settings.ProviderId == "deepseek" && string.IsNullOrWhiteSpace(_settings.DeepSeekApiKey))
+            else if (string.Equals(_settings.ProviderId, "deepseek", StringComparison.OrdinalIgnoreCase)
+                     && string.IsNullOrWhiteSpace(_settings.DeepSeekApiKey))
             {
-                Dispatcher.BeginInvoke(ShowSettings, DispatcherPriority.ApplicationIdle);
+                ScheduleCredentialRecovery(TimeSpan.FromMilliseconds(50));
             }
         }
         catch (Exception exception)
         {
+            _healthJournal.Record(RuntimeHealthEvent.StartupFailed, exception);
             System.Diagnostics.Debug.WriteLine($"InstantTranslate startup failed: {exception}");
             WpfMessageBox.Show(
                 L(
@@ -174,6 +223,259 @@ public partial class App : System.Windows.Application
     private void OnTranslationFailed(string message)
     {
         Dispatcher.BeginInvoke(() => _trayIcon?.ShowError(message));
+    }
+
+    private void OnHotkeyStoppedUnexpectedly()
+    {
+        _healthJournal.Record(RuntimeHealthEvent.HotkeyStoppedUnexpectedly);
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (_isExiting)
+                {
+                    return;
+                }
+
+                var previous = _hotkeyManager;
+                if (previous is not null)
+                {
+                    previous.TranslateClipboardRequested -= TranslateClipboard;
+                    previous.HotkeyStoppedUnexpectedly -= OnHotkeyStoppedUnexpectedly;
+                    previous.Dispose();
+                }
+
+                var replacement = new GlobalHotkeyManager();
+                replacement.TranslateClipboardRequested += TranslateClipboard;
+                replacement.HotkeyStoppedUnexpectedly += OnHotkeyStoppedUnexpectedly;
+                try
+                {
+                    replacement.Start();
+                    _hotkeyManager = replacement;
+                    _healthJournal.Record(RuntimeHealthEvent.HotkeyRecovered);
+                }
+                catch (Exception exception)
+                {
+                    replacement.TranslateClipboardRequested -= TranslateClipboard;
+                    replacement.HotkeyStoppedUnexpectedly -= OnHotkeyStoppedUnexpectedly;
+                    replacement.Dispose();
+                    _hotkeyManager = null;
+                    _healthJournal.Record(RuntimeHealthEvent.HotkeyRegistrationFailed, exception);
+                }
+            },
+            DispatcherPriority.Send);
+    }
+
+    private void StartMouseHookWithRecovery()
+    {
+        try
+        {
+            _mouseHook?.Start();
+            _mouseHookRecoveryFailures = 0;
+            _healthJournal.Record(RuntimeHealthEvent.MouseHookStarted);
+
+            // Startup applications can be launched while Windows is still
+            // completing the interactive desktop. Rebinding once shortly after
+            // launch prevents a stale early hook from making the app appear to
+            // be running while it receives no gestures.
+            ScheduleMouseHookRecovery(TimeSpan.FromSeconds(8));
+        }
+        catch (Exception exception)
+        {
+            _healthJournal.Record(RuntimeHealthEvent.MouseHookRecoveryFailed, exception);
+            System.Diagnostics.Debug.WriteLine($"InstantTranslate mouse hook startup failed: {exception}");
+            _trayIcon?.ShowError(L(
+                "Input capture could not start. InstantTranslate will retry automatically.",
+                "划词捕获暂时无法启动，InstantTranslate 将自动重试。"));
+            ScheduleMouseHookRecovery(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    private AppSettings GetSettingsSnapshot()
+    {
+        return _settings;
+    }
+
+    private void ScheduleCredentialRecovery(TimeSpan delay)
+    {
+        if (_isExiting
+            || !string.Equals(_settings.ProviderId, "deepseek", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(_settings.DeepSeekApiKey))
+        {
+            return;
+        }
+
+        StopCredentialRecoveryTimer();
+        _credentialRecoveryTimer = new DispatcherTimer(DispatcherPriority.ApplicationIdle, Dispatcher)
+        {
+            Interval = delay,
+        };
+        _credentialRecoveryTimer.Tick += CredentialRecoveryTimer_Tick;
+        _credentialRecoveryTimer.Start();
+    }
+
+    private async void CredentialRecoveryTimer_Tick(object? sender, EventArgs e)
+    {
+        StopCredentialRecoveryTimer();
+        if (_isExiting || _isCredentialRecoveryInProgress)
+        {
+            return;
+        }
+
+        var revision = _settingsRevision;
+        _isCredentialRecoveryInProgress = true;
+        try
+        {
+            var readResult = await Task.Run(
+                () =>
+                {
+                    var succeeded = _settingsStore.TryReadApiKey(out var recoveredApiKey);
+                    return (Succeeded: succeeded, ApiKey: recoveredApiKey);
+                });
+            if (_isExiting || revision != _settingsRevision)
+            {
+                return;
+            }
+
+            if (readResult.Succeeded)
+            {
+                _credentialRecoveryFailures = 0;
+                _settings = _settings with { DeepSeekApiKey = readResult.ApiKey };
+                _healthJournal.Record(RuntimeHealthEvent.CredentialRecovered);
+                if (string.IsNullOrWhiteSpace(readResult.ApiKey)
+                    && string.Equals(_settings.ProviderId, "deepseek", StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = Dispatcher.BeginInvoke(ShowSettings, DispatcherPriority.ApplicationIdle);
+                }
+
+                return;
+            }
+
+            _credentialRecoveryFailures++;
+            _healthJournal.Record(
+                RuntimeHealthEvent.CredentialReadFailed,
+                numericCode: _credentialRecoveryFailures);
+            var retrySeconds = Math.Min(30, 2 + (_credentialRecoveryFailures * 3));
+            ScheduleCredentialRecovery(TimeSpan.FromSeconds(retrySeconds));
+        }
+        finally
+        {
+            _isCredentialRecoveryInProgress = false;
+        }
+    }
+
+    private void StopCredentialRecoveryTimer()
+    {
+        if (_credentialRecoveryTimer is null)
+        {
+            return;
+        }
+
+        _credentialRecoveryTimer.Stop();
+        _credentialRecoveryTimer.Tick -= CredentialRecoveryTimer_Tick;
+        _credentialRecoveryTimer = null;
+    }
+
+    private void OnMouseHookStoppedUnexpectedly()
+    {
+        _healthJournal.Record(RuntimeHealthEvent.MouseHookStoppedUnexpectedly);
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (_isExiting)
+                {
+                    return;
+                }
+
+                System.Diagnostics.Debug.WriteLine("InstantTranslate mouse hook stopped unexpectedly; scheduling recovery.");
+                ScheduleMouseHookRecovery(TimeSpan.FromSeconds(1));
+            },
+            DispatcherPriority.Send);
+    }
+
+    private void RepairInputCapture()
+    {
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (_isExiting || _mouseHook is null)
+                {
+                    return;
+                }
+
+                _mouseHookRecoveryFailures = 0;
+                ScheduleMouseHookRecovery(TimeSpan.FromMilliseconds(50));
+                _trayIcon?.ShowInfo(
+                    "InstantTranslate",
+                    L(
+                        "Refreshing input capture. Select text again in a moment.",
+                        "正在刷新划词捕获，请稍候再次选中文字。"));
+            },
+            DispatcherPriority.Send);
+    }
+
+    private void ScheduleMouseHookRecovery(TimeSpan delay)
+    {
+        if (_isExiting || _mouseHook is null)
+        {
+            return;
+        }
+
+        if (_mouseHookRecoveryTimer is not null)
+        {
+            _mouseHookRecoveryTimer.Stop();
+            _mouseHookRecoveryTimer.Tick -= MouseHookRecoveryTimer_Tick;
+        }
+
+        _mouseHookRecoveryTimer = new DispatcherTimer(DispatcherPriority.ApplicationIdle, Dispatcher)
+        {
+            Interval = delay,
+        };
+        _mouseHookRecoveryTimer.Tick += MouseHookRecoveryTimer_Tick;
+        _mouseHookRecoveryTimer.Start();
+    }
+
+    private async void MouseHookRecoveryTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_mouseHookRecoveryTimer is not null)
+        {
+            _mouseHookRecoveryTimer.Stop();
+            _mouseHookRecoveryTimer.Tick -= MouseHookRecoveryTimer_Tick;
+            _mouseHookRecoveryTimer = null;
+        }
+
+        if (_isExiting || _isMouseHookRecoveryInProgress || _mouseHook is null)
+        {
+            return;
+        }
+
+        var hook = _mouseHook;
+        _isMouseHookRecoveryInProgress = true;
+        try
+        {
+            await Task.Run(hook.Restart);
+            _mouseHookRecoveryFailures = 0;
+            _healthJournal.Record(RuntimeHealthEvent.MouseHookRecoverySucceeded);
+        }
+        catch (Exception exception)
+        {
+            _healthJournal.Record(RuntimeHealthEvent.MouseHookRecoveryFailed, exception);
+            System.Diagnostics.Debug.WriteLine($"InstantTranslate mouse hook recovery failed: {exception}");
+            _mouseHookRecoveryFailures++;
+            var retrySeconds = Math.Min(15, 2 + (_mouseHookRecoveryFailures * 2));
+            ScheduleMouseHookRecovery(TimeSpan.FromSeconds(retrySeconds));
+        }
+        finally
+        {
+            _isMouseHookRecoveryInProgress = false;
+            if (!_isExiting && _mouseHookRecoveryFailures == 0)
+            {
+                // Windows can silently remove WH_MOUSE_LL after a callback
+                // timeout without ending our message loop. The callback is now
+                // tiny, and this low-frequency rebind covers the undetectable
+                // residual case as well as long-running desktop sessions.
+                ScheduleMouseHookRecovery(PeriodicMouseHookRebindInterval);
+            }
+        }
     }
 
     private async Task RunPopupSmokeTestAsync()
@@ -194,7 +496,20 @@ public partial class App : System.Windows.Application
                 "This is Chinese source text used for UI verification.",
                 LanguageDirectionResolver.English,
                 anchor);
-            await Task.Delay(900);
+            await Task.Delay(250);
+            var popup = _popupManager?.GetWindowForVisualTest(long.MaxValue)
+                ?? throw new InvalidOperationException("无法创建浮窗冒烟测试窗口。");
+            if (!popup.IsVisible)
+            {
+                throw new InvalidOperationException("收到译文后浮窗没有显示。");
+            }
+
+            _popupManager.HideTransientPopupIfOutside(new ScreenPoint(-32000, -32000));
+            await Task.Delay(80);
+            if (popup.IsVisible)
+            {
+                throw new InvalidOperationException("未置顶浮窗没有在外部点击路径中关闭。");
+            }
         }
         catch (Exception exception)
         {
@@ -330,6 +645,157 @@ public partial class App : System.Windows.Application
         }
     }
 
+    private async Task RunSettingsLifecycleTestAsync()
+    {
+        try
+        {
+            // Warm WPF/font caches before measuring retained native resources.
+            for (var index = 0; index < 2; index++)
+            {
+                await ShowAndCloseSettingsOffscreenAsync();
+            }
+
+            ForceFullCollection();
+            using var process = System.Diagnostics.Process.GetCurrentProcess();
+            process.Refresh();
+            var plainBaselineHandles = process.HandleCount;
+            for (var index = 0; index < 30; index++)
+            {
+                await ShowAndClosePlainWindowOffscreenAsync();
+            }
+
+            await CompleteWindowResourceCleanupAsync();
+            process.Refresh();
+            var plainWindowGrowth = process.HandleCount - plainBaselineHandles;
+            _healthJournal.Record(
+                RuntimeHealthEvent.PlainWindowLifecycleCheck,
+                numericCode: plainWindowGrowth);
+
+            var secondPlainBaselineHandles = process.HandleCount;
+            for (var index = 0; index < 30; index++)
+            {
+                await ShowAndClosePlainWindowOffscreenAsync();
+            }
+
+            await CompleteWindowResourceCleanupAsync();
+            process.Refresh();
+            var secondPlainWindowGrowth = process.HandleCount - secondPlainBaselineHandles;
+            _healthJournal.Record(
+                RuntimeHealthEvent.PlainWindowSecondLifecycleCheck,
+                numericCode: secondPlainWindowGrowth);
+
+            var baselineHandles = process.HandleCount;
+            var baselineGdi = NativeMethods.GetGuiResources(process.Handle, NativeMethods.GrGdiObjects);
+            var baselineUser = NativeMethods.GetGuiResources(process.Handle, NativeMethods.GrUserObjects);
+            for (var index = 0; index < 30; index++)
+            {
+                await ShowAndCloseSettingsOffscreenAsync();
+            }
+
+            await CompleteWindowResourceCleanupAsync();
+            process.Refresh();
+            var retainedHandleGrowth = process.HandleCount - baselineHandles;
+            var retainedGdiGrowth = (int)NativeMethods.GetGuiResources(
+                process.Handle,
+                NativeMethods.GrGdiObjects) - (int)baselineGdi;
+            var retainedUserGrowth = (int)NativeMethods.GetGuiResources(
+                process.Handle,
+                NativeMethods.GrUserObjects) - (int)baselineUser;
+            _healthJournal.Record(
+                RuntimeHealthEvent.SettingsLifecycleCheck,
+                numericCode: retainedHandleGrowth);
+            _healthJournal.Record(
+                RuntimeHealthEvent.SettingsLifecycleGdiCheck,
+                numericCode: retainedGdiGrowth);
+            _healthJournal.Record(
+                RuntimeHealthEvent.SettingsLifecycleUserCheck,
+                numericCode: retainedUserGrowth);
+            // WPF/MILCore retains a bounded native window cache even for empty
+            // windows. Fail only if Settings retains materially more than a
+            // same-sized second batch of plain WPF windows.
+            if (retainedHandleGrowth > secondPlainWindowGrowth + 12
+                || retainedGdiGrowth > 2
+                || retainedUserGrowth > 2)
+            {
+                throw new InvalidOperationException(
+                    $"Settings lifecycle retained {retainedHandleGrowth} handles after collection.");
+            }
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"InstantTranslate settings lifecycle test failed: {exception}");
+            _exitCode = 1;
+        }
+        finally
+        {
+            ExitApplication();
+        }
+    }
+
+    private async Task ShowAndCloseSettingsOffscreenAsync()
+    {
+        var window = new SettingsWindow(AppSettings.Default)
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -32_000,
+            Top = -32_000,
+            ShowInTaskbar = false,
+            ShowActivated = false,
+        };
+        window.Show();
+        await Dispatcher.InvokeAsync(
+            static () => { },
+            DispatcherPriority.Loaded);
+        window.Close();
+        await Dispatcher.InvokeAsync(
+            static () => { },
+            DispatcherPriority.ApplicationIdle);
+    }
+
+    private async Task ShowAndClosePlainWindowOffscreenAsync()
+    {
+        var window = new Window
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -32_000,
+            Top = -32_000,
+            ShowInTaskbar = false,
+            ShowActivated = false,
+            Width = 200,
+            Height = 100,
+        };
+        window.Show();
+        await Dispatcher.InvokeAsync(
+            static () => { },
+            DispatcherPriority.Loaded);
+        window.Close();
+        await Dispatcher.InvokeAsync(
+            static () => { },
+            DispatcherPriority.ApplicationIdle);
+    }
+
+    private async Task CompleteWindowResourceCleanupAsync()
+    {
+        // MILCore releases some window/render resources asynchronously on its
+        // composition thread. Give that cleanup a bounded opportunity before
+        // treating retained kernel handles as an application leak.
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        await Dispatcher.InvokeAsync(
+            static () => { },
+            DispatcherPriority.ApplicationIdle);
+        ForceFullCollection();
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        ForceFullCollection();
+    }
+
+    private static void ForceFullCollection()
+    {
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+    }
+
     private static string GetSnapshotPath(string name)
     {
         return System.IO.Path.Combine(
@@ -349,8 +815,45 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        DisposeServices();
+        DisposeServicesSafely();
+        _healthJournal.Record(RuntimeHealthEvent.AppExited, numericCode: e.ApplicationExitCode);
         base.OnExit(e);
+    }
+
+    private void SubscribeRuntimeDiagnostics()
+    {
+        if (_isRuntimeDiagnosticsSubscribed)
+        {
+            return;
+        }
+
+        DispatcherUnhandledException += App_DispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
+        TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
+        _isRuntimeDiagnosticsSubscribed = true;
+    }
+
+    private void App_DispatcherUnhandledException(
+        object sender,
+        DispatcherUnhandledExceptionEventArgs e)
+    {
+        _healthJournal.Record(RuntimeHealthEvent.DispatcherUnhandledException, e.Exception);
+    }
+
+    private void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        _healthJournal.Record(
+            RuntimeHealthEvent.ProcessUnhandledException,
+            e.ExceptionObject as Exception,
+            numericCode: e.IsTerminating ? 1 : 0);
+    }
+
+    private void TaskScheduler_UnobservedTaskException(
+        object? sender,
+        UnobservedTaskExceptionEventArgs e)
+    {
+        _healthJournal.Record(RuntimeHealthEvent.UnobservedTaskException, e.Exception);
+        e.SetObserved();
     }
 
     private void ShowSettings()
@@ -368,8 +871,11 @@ public partial class App : System.Windows.Application
                 return;
             }
 
+            var settingsSnapshot = GetSettingsSnapshot();
+            var preserveCredentialOnBlank = _settingsStore.ApiKeyReadFailed
+                                            || _isCredentialRecoveryInProgress;
             var settingsWindow = new SettingsWindow(
-                _settings,
+                settingsSnapshot,
                 () => _translationMemoryStore.Count,
                 _translationMemoryStore.Clear);
             _settingsWindow = settingsWindow;
@@ -390,9 +896,31 @@ public partial class App : System.Windows.Application
 
             try
             {
-                _startupRegistration.SetEnabled(settingsWindow.ResultSettings.StartWithWindows);
-                _settingsStore.Save(settingsWindow.ResultSettings);
-                _settings = settingsWindow.ResultSettings;
+                var persistApiKey = settingsWindow.ApiKeyClearRequested
+                                    || !preserveCredentialOnBlank
+                                    || !string.IsNullOrWhiteSpace(settingsWindow.ResultSettings.DeepSeekApiKey);
+                var resultSettings = settingsWindow.ResultSettings;
+                if (!persistApiKey && string.IsNullOrWhiteSpace(resultSettings.DeepSeekApiKey))
+                {
+                    // A credential recovery can finish while ShowDialog runs its
+                    // nested dispatcher loop. Never let the dialog's stale blank
+                    // field erase that recovered in-memory or stored secret.
+                    resultSettings = resultSettings with
+                    {
+                        DeepSeekApiKey = _settings.DeepSeekApiKey,
+                    };
+                }
+
+                _startupRegistration.SetEnabled(resultSettings.StartWithWindows);
+                _settingsStore.Save(
+                    resultSettings,
+                    persistApiKey);
+                _settings = resultSettings;
+                _settingsRevision++;
+                if (!persistApiKey)
+                {
+                    ScheduleCredentialRecovery(TimeSpan.FromSeconds(2));
+                }
                 ThemeManager.Apply(_settings);
                 _popupManager?.ApplyAppearanceToOpenWindows();
                 _trayIcon?.ApplyUiLanguage(_settings.UiLanguage);
@@ -410,6 +938,13 @@ public partial class App : System.Windows.Application
                 {
                     System.Diagnostics.Debug.WriteLine(
                         $"InstantTranslate settings rollback failed: {rollbackException}");
+                }
+
+                if (!_isCredentialRecoveryInProgress
+                    && string.Equals(_settings.ProviderId, "deepseek", StringComparison.OrdinalIgnoreCase)
+                    && string.IsNullOrWhiteSpace(_settings.DeepSeekApiKey))
+                {
+                    ScheduleCredentialRecovery(TimeSpan.FromSeconds(2));
                 }
 
                 WpfMessageBox.Show(
@@ -482,12 +1017,30 @@ public partial class App : System.Windows.Application
                 try
                 {
                     var useChinese = _settings.UiLanguage == UiLanguageCatalog.SimplifiedChineseLanguageId;
-                    WpfClipboard.SetText(_performanceMonitor.CreateReport(useChinese));
+                    var inputStatus = _mouseHook?.CreateStatusReport(useChinese)
+                                      ?? (useChinese
+                                          ? "输入捕获状态\n全局鼠标钩子：不可用"
+                                          : "Input capture status\nGlobal mouse hook: unavailable");
+                    var selectionStatus = _uiaSelectionReader?.CreateStatusReport(useChinese)
+                                          ?? (useChinese
+                                              ? "UI Automation 取词状态\n不可用"
+                                              : "UI Automation selection status\nUnavailable");
+                    var popupStatus = _popupManager?.CreateStatusReport(useChinese)
+                                      ?? (useChinese
+                                          ? "浮窗状态\n不可用"
+                                          : "Popup status\nUnavailable");
+                    WpfClipboard.SetText(string.Join(
+                        Environment.NewLine + Environment.NewLine,
+                        _performanceMonitor.CreateReport(useChinese),
+                        inputStatus,
+                        selectionStatus,
+                        popupStatus,
+                        _healthJournal.CreateReport(useChinese)));
                     _trayIcon?.ShowInfo(
                         "InstantTranslate",
                         L(
-                            "Performance diagnostics copied. No translated text or credentials are included.",
-                            "性能诊断已复制，不包含原文、译文或凭据。"));
+                            "Diagnostics copied. No selected text, translations, or credentials are included.",
+                            "诊断信息已复制，不包含原文、译文或凭据。"));
                 }
                 catch (ExternalException)
                 {
@@ -497,21 +1050,6 @@ public partial class App : System.Windows.Application
                 }
             },
             DispatcherPriority.Send);
-    }
-
-    private void TryApplyStartupSetting()
-    {
-        try
-        {
-            _startupRegistration.SetEnabled(_settings.StartWithWindows);
-        }
-        catch (Exception exception)
-        {
-            System.Diagnostics.Debug.WriteLine($"InstantTranslate startup registration failed: {exception}");
-            _trayIcon?.ShowError(L(
-                "Could not update the startup setting.",
-                "无法更新开机启动设置。"));
-        }
     }
 
     private void SetEnabled(bool isEnabled)
@@ -549,7 +1087,8 @@ public partial class App : System.Windows.Application
             }
 
             _isExiting = true;
-            DisposeServices();
+            _healthJournal.Record(RuntimeHealthEvent.ShutdownRequested, numericCode: _exitCode);
+            DisposeServicesSafely();
             Shutdown(_exitCode);
         });
     }
@@ -561,6 +1100,13 @@ public partial class App : System.Windows.Application
             _smokeTestTimer.Stop();
             _smokeTestTimer.Tick -= SmokeTestTimer_Tick;
             _smokeTestTimer = null;
+        }
+
+        if (_mouseHookRecoveryTimer is not null)
+        {
+            _mouseHookRecoveryTimer.Stop();
+            _mouseHookRecoveryTimer.Tick -= MouseHookRecoveryTimer_Tick;
+            _mouseHookRecoveryTimer = null;
         }
 
         ExitApplication();
@@ -589,8 +1135,87 @@ public partial class App : System.Windows.Application
             DispatcherPriority.Normal);
     }
 
+    private void TrySubscribeSessionEvents()
+    {
+        try
+        {
+            SystemEvents.SessionSwitch += SystemEvents_SessionSwitch;
+            SystemEvents.PowerModeChanged += SystemEvents_PowerModeChanged;
+            _isSessionEventsSubscribed = true;
+        }
+        catch (Exception exception)
+        {
+            SystemEvents.SessionSwitch -= SystemEvents_SessionSwitch;
+            SystemEvents.PowerModeChanged -= SystemEvents_PowerModeChanged;
+            System.Diagnostics.Debug.WriteLine(
+                $"InstantTranslate could not subscribe to session recovery events: {exception}");
+        }
+    }
+
+    private void SystemEvents_SessionSwitch(object sender, SessionSwitchEventArgs e)
+    {
+        if (e.Reason is not (SessionSwitchReason.SessionLogon
+            or SessionSwitchReason.SessionUnlock
+            or SessionSwitchReason.RemoteConnect))
+        {
+            return;
+        }
+
+        QueueInputRecoveryAfterSystemTransition();
+    }
+
+    private void SystemEvents_PowerModeChanged(object sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == PowerModes.Resume)
+        {
+            QueueInputRecoveryAfterSystemTransition();
+        }
+    }
+
+    private void QueueInputRecoveryAfterSystemTransition()
+    {
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (!_isExiting)
+                {
+                    ScheduleMouseHookRecovery(TimeSpan.FromSeconds(1));
+                }
+            },
+            DispatcherPriority.ApplicationIdle);
+    }
+
     private void DisposeServices()
     {
+        // Release the per-session lifetime claim first. This makes an immediate
+        // relaunch reliable even if a WPF window or native input service needs a
+        // little longer to finish its own cleanup.
+        var singleInstance = _singleInstance;
+        _singleInstance = null;
+        try
+        {
+            singleInstance?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            _healthJournal.Record(RuntimeHealthEvent.ServiceDisposeFailed, exception, numericCode: 1);
+        }
+
+        if (_isRuntimeDiagnosticsSubscribed)
+        {
+            DispatcherUnhandledException -= App_DispatcherUnhandledException;
+            AppDomain.CurrentDomain.UnhandledException -= CurrentDomain_UnhandledException;
+            TaskScheduler.UnobservedTaskException -= TaskScheduler_UnobservedTaskException;
+            _isRuntimeDiagnosticsSubscribed = false;
+        }
+
+        if (_isSessionEventsSubscribed)
+        {
+            SystemEvents.SessionSwitch -= SystemEvents_SessionSwitch;
+            SystemEvents.PowerModeChanged -= SystemEvents_PowerModeChanged;
+            _isSessionEventsSubscribed = false;
+        }
+
         if (_isSystemParametersSubscribed)
         {
             SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
@@ -604,6 +1229,15 @@ public partial class App : System.Windows.Application
             _smokeTestTimer = null;
         }
 
+        if (_mouseHookRecoveryTimer is not null)
+        {
+            _mouseHookRecoveryTimer.Stop();
+            _mouseHookRecoveryTimer.Tick -= MouseHookRecoveryTimer_Tick;
+            _mouseHookRecoveryTimer = null;
+        }
+
+        StopCredentialRecoveryTimer();
+
         if (_coordinator is not null)
         {
             _coordinator.TranslationFailed -= OnTranslationFailed;
@@ -611,15 +1245,22 @@ public partial class App : System.Windows.Application
             _coordinator = null;
         }
 
+        _uiaSelectionReader = null;
+
         _translationProviderFactory?.Dispose();
         _translationProviderFactory = null;
 
-        _mouseHook?.Dispose();
-        _mouseHook = null;
+        if (_mouseHook is not null)
+        {
+            _mouseHook.HookStoppedUnexpectedly -= OnMouseHookStoppedUnexpectedly;
+            _mouseHook.Dispose();
+            _mouseHook = null;
+        }
 
         if (_hotkeyManager is not null)
         {
             _hotkeyManager.TranslateClipboardRequested -= TranslateClipboard;
+            _hotkeyManager.HotkeyStoppedUnexpectedly -= OnHotkeyStoppedUnexpectedly;
             _hotkeyManager.Dispose();
             _hotkeyManager = null;
         }
@@ -630,6 +1271,7 @@ public partial class App : System.Windows.Application
             _trayIcon.EnabledChanged -= SetEnabled;
             _trayIcon.TranslateClipboardRequested -= TranslateClipboard;
             _trayIcon.DiagnosticsRequested -= CopyPerformanceDiagnostics;
+            _trayIcon.RestartInputCaptureRequested -= RepairInputCapture;
             _trayIcon.AboutRequested -= ShowAbout;
             _trayIcon.ExitRequested -= ExitApplication;
             _trayIcon.Dispose();
@@ -639,7 +1281,19 @@ public partial class App : System.Windows.Application
         _popupManager?.Dispose();
         _popupManager = null;
 
-        _singleInstance?.Dispose();
-        _singleInstance = null;
+    }
+
+    private void DisposeServicesSafely()
+    {
+        try
+        {
+            DisposeServices();
+        }
+        catch (Exception exception)
+        {
+            _healthJournal.Record(RuntimeHealthEvent.ServiceDisposeFailed, exception, numericCode: 2);
+            System.Diagnostics.Debug.WriteLine(
+                $"InstantTranslate service cleanup failed: {exception}");
+        }
     }
 }

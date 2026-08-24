@@ -12,39 +12,47 @@ internal sealed class GlobalHotkeyManager : IDisposable
 {
     private const int TranslateClipboardHotkeyId = 0x4954;
     private const uint VirtualKeyT = 0x54;
-    private readonly ManualResetEventSlim _started = new(false);
+    private readonly object _lifecycleSync = new();
+    private readonly TaskCompletionSource<Exception?> _startup = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
     private Thread? _messageThread;
     private uint _messageThreadId;
-    private Exception? _startupException;
     private bool _disposed;
 
     public event Action? TranslateClipboardRequested;
 
+    public event Action? HotkeyStoppedUnexpectedly;
+
+    public bool IsRunning => Volatile.Read(ref _messageThreadId) != 0;
+
     public void Start()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_messageThread is not null)
+        lock (_lifecycleSync)
         {
-            return;
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_messageThread is not null)
+            {
+                return;
+            }
+
+            _messageThread = new Thread(MessageThreadMain)
+            {
+                IsBackground = true,
+                Name = "InstantTranslate.GlobalHotkey",
+            };
+            _messageThread.Start();
         }
 
-        _messageThread = new Thread(MessageThreadMain)
-        {
-            IsBackground = true,
-            Name = "InstantTranslate.GlobalHotkey",
-        };
-        _messageThread.Start();
-
-        if (!_started.Wait(TimeSpan.FromSeconds(3)))
+        if (!_startup.Task.Wait(TimeSpan.FromSeconds(3)))
         {
             throw new TimeoutException("全局快捷键启动超时。");
         }
 
-        if (_startupException is not null)
+        if (_startup.Task.Result is { } startupException)
         {
             throw new InvalidOperationException(
                 "无法注册 Ctrl+Shift+T，可能已被其他程序占用。",
-                _startupException);
+                startupException);
         }
     }
 
@@ -53,7 +61,26 @@ internal sealed class GlobalHotkeyManager : IDisposable
         var isRegistered = false;
         try
         {
-            _messageThreadId = NativeMethods.GetCurrentThreadId();
+            var threadId = NativeMethods.GetCurrentThreadId();
+            // Force creation of the thread message queue before publishing its
+            // id. A concurrent Dispose can then reliably enqueue WM_QUIT even
+            // if registration has not started yet.
+            _ = NativeMethods.PeekMessage(
+                out _,
+                IntPtr.Zero,
+                0,
+                0,
+                NativeMethods.PmNoRemove);
+            lock (_lifecycleSync)
+            {
+                _messageThreadId = threadId;
+                if (_disposed)
+                {
+                    _startup.TrySetResult(null);
+                    return;
+                }
+            }
+
             isRegistered = NativeMethods.RegisterHotKey(
                 IntPtr.Zero,
                 TranslateClipboardHotkeyId,
@@ -66,12 +93,11 @@ internal sealed class GlobalHotkeyManager : IDisposable
         }
         catch (Exception exception)
         {
-            _startupException = exception;
-            _started.Set();
+            _startup.TrySetResult(exception);
             return;
         }
 
-        _started.Set();
+        _startup.TrySetResult(null);
         try
         {
             while (NativeMethods.GetMessage(out var message, IntPtr.Zero, 0, 0) > 0)
@@ -96,23 +122,50 @@ internal sealed class GlobalHotkeyManager : IDisposable
             {
                 NativeMethods.UnregisterHotKey(IntPtr.Zero, TranslateClipboardHotkeyId);
             }
+
+            var notifyUnexpectedStop = false;
+            lock (_lifecycleSync)
+            {
+                _messageThreadId = 0;
+                _messageThread = null;
+                notifyUnexpectedStop = !_disposed;
+            }
+
+            if (notifyUnexpectedStop)
+            {
+                try
+                {
+                    HotkeyStoppedUnexpectedly?.Invoke();
+                }
+                catch
+                {
+                    // A recovery subscriber must not terminate the native loop.
+                }
+            }
         }
     }
 
     public void Dispose()
     {
-        if (_disposed)
+        Thread? messageThread;
+        uint messageThreadId;
+        lock (_lifecycleSync)
         {
-            return;
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            messageThread = _messageThread;
+            messageThreadId = _messageThreadId;
         }
 
-        _disposed = true;
-        if (_messageThreadId != 0)
+        if (messageThreadId != 0)
         {
-            NativeMethods.PostThreadMessage(_messageThreadId, NativeMethods.WmQuit, UIntPtr.Zero, IntPtr.Zero);
+            NativeMethods.PostThreadMessage(messageThreadId, NativeMethods.WmQuit, UIntPtr.Zero, IntPtr.Zero);
         }
 
-        _messageThread?.Join(TimeSpan.FromSeconds(2));
-        _started.Dispose();
+        messageThread?.Join(TimeSpan.FromSeconds(2));
     }
 }

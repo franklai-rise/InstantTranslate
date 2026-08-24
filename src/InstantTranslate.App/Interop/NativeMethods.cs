@@ -16,13 +16,15 @@ internal static class NativeMethods
     internal const int WmHotKey = 0x0312;
     internal const int WmLButtonDown = 0x0201;
     internal const int WmLButtonUp = 0x0202;
+    internal const uint PmNoRemove = 0x0000;
     internal const int MaNoActivate = 3;
     internal const uint GaRoot = 2;
     internal const uint GaParent = 1;
+    internal const uint GaRootOwner = 3;
     internal const uint EmGetSel = 0x00B0;
     internal const uint EmGetSelText = 0x00C2;
-    internal const uint SciGetSelText = 2161;
     internal const uint SmtoAbortIfHung = 0x0002;
+    internal const int HtClient = 1;
     internal const int HtCaption = 2;
     internal const int HtSize = 4;
     internal const int HtHScroll = 6;
@@ -50,6 +52,9 @@ internal static class NativeMethods
     internal const uint ModNoRepeat = 0x4000;
     internal const int SmCxDrag = 68;
     internal const int SmCyDrag = 69;
+    internal const uint GrGdiObjects = 0;
+    internal const uint GrUserObjects = 1;
+    internal const uint CoInitMultithreaded = 0x0;
     internal static readonly IntPtr HwndTopmost = new(-1);
 
     internal delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
@@ -120,6 +125,15 @@ internal static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern int GetMessage(out Message message, IntPtr windowHandle, uint minFilter, uint maxFilter);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool PeekMessage(
+        out Message message,
+        IntPtr windowHandle,
+        uint minFilter,
+        uint maxFilter,
+        uint removeMessage);
+
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PostThreadMessage(uint threadId, uint message, UIntPtr wParam, IntPtr lParam);
@@ -134,6 +148,21 @@ internal static class NativeMethods
 
     [DllImport("kernel32.dll")]
     internal static extern uint GetCurrentThreadId();
+
+    [DllImport("ole32.dll")]
+    internal static extern int CoInitializeEx(IntPtr reserved, uint coInit);
+
+    [DllImport("ole32.dll")]
+    internal static extern void CoUninitialize();
+
+    [DllImport("ole32.dll")]
+    internal static extern int CoEnableCallCancellation(IntPtr reserved);
+
+    [DllImport("ole32.dll")]
+    internal static extern int CoDisableCallCancellation(IntPtr reserved);
+
+    [DllImport("ole32.dll")]
+    internal static extern int CoCancelCall(uint threadId, uint timeoutSeconds);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern IntPtr GetModuleHandle(string? moduleName);
@@ -153,6 +182,9 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     internal static extern uint GetClipboardSequenceNumber();
+
+    [DllImport("user32.dll")]
+    internal static extern uint GetGuiResources(IntPtr processHandle, uint flags);
 
     [DllImport("user32.dll")]
     internal static extern IntPtr GetAncestor(IntPtr windowHandle, uint flags);

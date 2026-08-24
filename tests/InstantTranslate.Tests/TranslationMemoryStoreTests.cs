@@ -109,6 +109,23 @@ public sealed class TranslationMemoryStoreTests : IDisposable
         Assert.Equal(originalFile, File.ReadAllBytes(path));
     }
 
+    [Fact]
+    public void CorruptExistingMemoryIsNeverOverwrittenByANewCorrection()
+    {
+        var path = Path.Combine(_directory, "corrupt-memory.dat");
+        var protector = new PrefixProtector();
+        Directory.CreateDirectory(_directory);
+        var corruptFile = protector.Protect("not-json"u8.ToArray());
+        File.WriteAllBytes(path, corruptFile);
+
+        var store = new TranslationMemoryStore(path, protector);
+
+        Assert.True(store.LoadFailed);
+        Assert.Throws<InvalidOperationException>(
+            () => store.AddOrUpdate("new", "新", "en", "zh"));
+        Assert.Equal(corruptFile, File.ReadAllBytes(path));
+    }
+
     [Theory]
     [InlineData("same text", "same text", 1.0)]
     [InlineData("finite element analysis", "finite element model", 0.5)]

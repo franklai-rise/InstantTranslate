@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '0.5.0',
+    [string]$Version = '0.5.4',
 
     [string]$CertificateThumbprint = '',
 
@@ -197,13 +197,14 @@ try {
         Write-Output 'Signature: unsigned (no certificate thumbprint supplied)'
     }
 
-    foreach ($smokeArgument in @('--smoke-test', '--popup-smoke-test')) {
+    foreach ($smokeArgument in @('--smoke-test', '--popup-smoke-test', '--settings-lifecycle-test')) {
         $smokeProcess = Start-Process `
             -FilePath $publishedExecutable `
             -ArgumentList $smokeArgument `
             -PassThru `
             -WindowStyle Hidden
-        if (-not $smokeProcess.WaitForExit(15000)) {
+        $smokeTimeoutMilliseconds = if ($smokeArgument -eq '--settings-lifecycle-test') { 60000 } else { 15000 }
+        if (-not $smokeProcess.WaitForExit($smokeTimeoutMilliseconds)) {
             $smokeProcess.Kill($true)
             throw "Published executable $smokeArgument timed out."
         }

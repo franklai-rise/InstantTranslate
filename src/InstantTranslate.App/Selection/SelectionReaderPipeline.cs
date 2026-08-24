@@ -62,6 +62,15 @@ internal sealed class SelectionReaderPipeline : IContextualSelectionReader
                 // The short primary-read budget expired; continue with the
                 // non-clipboard reader.
             }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested
+                                              && IsRecoverablePrimaryReaderFailure(exception))
+            {
+                // UI Automation is supplied by the target application. A bad
+                // provider must not prevent the safe native fallback from
+                // running for this gesture.
+                System.Diagnostics.Debug.WriteLine(
+                    $"InstantTranslate primary selection reader failed: {exception.GetType().Name}");
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(capture?.Text))
@@ -105,5 +114,13 @@ internal sealed class SelectionReaderPipeline : IContextualSelectionReader
 
         var text = await reader.TryReadSelectedTextAsync(point, cancellationToken).ConfigureAwait(false);
         return string.IsNullOrWhiteSpace(text) ? null : new SelectionCapture(text);
+    }
+
+    private static bool IsRecoverablePrimaryReaderFailure(Exception exception)
+    {
+        return exception is not OutOfMemoryException
+            and not AccessViolationException
+            and not AppDomainUnloadedException
+            and not BadImageFormatException;
     }
 }

@@ -32,4 +32,47 @@ public sealed class WindowProcessResolverTests
     {
         Assert.False(WindowProcessResolver.IsClipboardFallbackProcessAllowed(processName));
     }
+
+    [Fact]
+    public void SelectionAllowsDifferentRendererProcessesInsideOneOwnedWindowTree()
+    {
+        var first = new SelectionWindowTarget(new IntPtr(100), 200);
+        var second = new SelectionWindowTarget(new IntPtr(100), 300);
+
+        Assert.True(WindowProcessResolver.AreTargetsInSameExternalWindow(
+            first,
+            second,
+            currentProcessId: 999));
+    }
+
+    [Fact]
+    public void SelectionRejectsTwoWindowsEvenWhenTheyBelongToOneProcess()
+    {
+        var first = new SelectionWindowTarget(new IntPtr(100), 200);
+        var second = new SelectionWindowTarget(new IntPtr(101), 200);
+
+        Assert.False(WindowProcessResolver.AreTargetsInSameExternalWindow(
+            first,
+            second,
+            currentProcessId: 999));
+    }
+
+    [Theory]
+    [InlineData(0, 200, 100, 200)]
+    [InlineData(100, 999, 100, 200)]
+    [InlineData(100, 200, 100, 999)]
+    public void SelectionRejectsMissingOrCurrentProcessRoots(
+        int firstRoot,
+        uint firstProcess,
+        int secondRoot,
+        uint secondProcess)
+    {
+        var first = new SelectionWindowTarget(new IntPtr(firstRoot), firstProcess);
+        var second = new SelectionWindowTarget(new IntPtr(secondRoot), secondProcess);
+
+        Assert.False(WindowProcessResolver.AreTargetsInSameExternalWindow(
+            first,
+            second,
+            currentProcessId: 999));
+    }
 }

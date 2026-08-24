@@ -19,6 +19,7 @@ internal partial class PopupWindow : Window
     private const double DefaultTranslationFontSize = 16.5;
     private const string DefaultEnglishTranslationFontFamily = "Times New Roman";
     private const string DefaultChineseTranslationFontFamily = "SimHei, 黑体, Microsoft YaHei UI";
+    private const int AutomaticSizeGrowthThreshold = 12;
     private System.Windows.Media.FontFamily _chineseTranslationFont;
     private System.Windows.Media.FontFamily _englishTranslationFont;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
@@ -28,6 +29,7 @@ internal partial class PopupWindow : Window
     private string _currentTranslationSourceText = string.Empty;
     private string _currentSourceLanguage = "自动检测";
     private string _translatedText = string.Empty;
+    private CompletedTranslation? _lastCompletedTranslation;
     private string _translationBeforeEdit = string.Empty;
     private string _targetLanguage = LanguageDirectionResolver.Chinese;
     private ScreenPoint _anchorPoint;
@@ -41,6 +43,8 @@ internal partial class PopupWindow : Window
     private BodyMessageKind _bodyMessageKind = BodyMessageKind.Translating;
     private string? _customFailureMessage;
     private bool _isEditingTranslation;
+    private bool _isAutomaticSizing;
+    private int _lastAutomaticSizeTextLength;
 
     public PopupWindow(
         long requestId,
@@ -63,7 +67,7 @@ internal partial class PopupWindow : Window
 
     public bool IsPinned { get; private set; }
 
-    public bool HasTranslation => !string.IsNullOrWhiteSpace(_translatedText);
+    public bool HasTranslation => _lastCompletedTranslation is not null;
 
     public string SourceText => _sourceText;
 
@@ -258,17 +262,24 @@ internal partial class PopupWindow : Window
         _anchorPoint = anchorPoint;
 
         var isFirstTranslationUpdate = !_hasDisplayedTranslation;
+        if (isFirstTranslationUpdate)
+        {
+            _isAutomaticSizing = true;
+            _lastAutomaticSizeTextLength = 0;
+        }
+
         SetTranslationText(translatedText);
         UpdateDirectionButtonText();
         LoadingPanel.Visibility = Visibility.Collapsed;
         SetActionBarVisibility(Visibility.Visible);
-        DirectionButton.IsEnabled = true;
+        DirectionButton.IsEnabled = false;
         CopySourceButton.IsEnabled = true;
         CopyTranslationButton.IsEnabled = true;
         EditTranslationButton.IsEnabled = false;
         TranslationRichTextBox.Visibility = Visibility.Visible;
         HideActionStatus();
         _hasDisplayedTranslation = true;
+        ApplyAutomaticSize(translatedText, anchorPoint, force: isFirstTranslationUpdate);
         if (isFirstTranslationUpdate || !IsVisible)
         {
             ShowAt(anchorPoint);
@@ -277,19 +288,39 @@ internal partial class PopupWindow : Window
 
     public void MarkTranslationComplete()
     {
+        ApplyAutomaticSize(_translatedText, _anchorPoint, force: true);
+        if (!string.IsNullOrWhiteSpace(_translatedText))
+        {
+            _lastCompletedTranslation = new CompletedTranslation(
+                _currentTranslationSourceText,
+                _currentSourceLanguage,
+                _translatedText,
+                _targetLanguage);
+        }
+
         if (HasTranslation && !_isEditingTranslation)
         {
+            DirectionButton.IsEnabled = true;
+            CopySourceButton.IsEnabled = true;
+            CopyTranslationButton.IsEnabled = true;
             EditTranslationButton.IsEnabled = true;
         }
     }
 
     public void RestoreTranslationAfterFailure()
     {
-        if (!HasTranslation)
+        if (_lastCompletedTranslation is not { } completed)
         {
             Close();
             return;
         }
+
+        _currentTranslationSourceText = completed.SourceText;
+        _currentSourceLanguage = completed.SourceLanguage;
+        _translatedText = completed.TranslatedText;
+        _targetLanguage = completed.TargetLanguage;
+        SetTranslationText(_translatedText);
+        UpdateDirectionButtonText();
 
         LoadingPanel.Visibility = Visibility.Collapsed;
         SetActionBarVisibility(Visibility.Visible);
@@ -336,6 +367,7 @@ internal partial class PopupWindow : Window
         _currentTranslationSourceText = string.Empty;
         _currentSourceLanguage = "自动检测";
         _translatedText = string.Empty;
+        _lastCompletedTranslation = null;
         _windowHandle = IntPtr.Zero;
         base.OnClosed(e);
         _lifetimeCancellation.Dispose();
@@ -400,13 +432,14 @@ internal partial class PopupWindow : Window
     private IntPtr WindowProcedure(IntPtr windowHandle, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (message == NativeMethods.WmNcHitTest
-            && _hasDisplayedTranslation
+            && IsVisible
             && NativeMethods.GetWindowRect(windowHandle, out var bounds))
         {
             var dpi = VisualTreeHelper.GetDpi(this);
-            var edgeThickness = Math.Max(7, (int)Math.Ceiling(7 * Math.Max(dpi.DpiScaleX, dpi.DpiScaleY)));
-            var hitTest = PopupResizeHitTest.Resolve(
+            var edgeThickness = Math.Max(10, (int)Math.Ceiling(10 * Math.Max(dpi.DpiScaleX, dpi.DpiScaleY)));
+            var hitTest = PopupResizeHitTest.ResolveWithInsetTop(
                 bounds,
+                GetPopupSurfaceTop(bounds),
                 PopupResizeHitTest.DecodeScreenPoint(lParam),
                 edgeThickness);
             if (hitTest != 0)
@@ -418,6 +451,27 @@ internal partial class PopupWindow : Window
         }
 
         return IntPtr.Zero;
+    }
+
+    private int GetPopupSurfaceTop(NativeMethods.NativeRect windowBounds)
+    {
+        if (PopupSurface.ActualHeight <= 0)
+        {
+            return windowBounds.Top;
+        }
+
+        try
+        {
+            var surfaceTopLeft = PopupSurface.PointToScreen(new System.Windows.Point(0, 0));
+            return Math.Clamp(
+                (int)Math.Round(surfaceTopLeft.Y),
+                windowBounds.Top,
+                windowBounds.Bottom - 1);
+        }
+        catch (InvalidOperationException)
+        {
+            return windowBounds.Top;
+        }
     }
 
     private async void CopySourceButton_Click(object sender, RoutedEventArgs e)
@@ -477,7 +531,7 @@ internal partial class PopupWindow : Window
         }
 
         IsPinned = true;
-        EnablePinnedResize();
+        EnterManualSizeMode(updateLayout: true);
         PinButton.Tag = "Pinned";
         PinButton.ToolTip = Localize("Release window", "取消保留");
         System.Windows.Automation.AutomationProperties.SetName(
@@ -625,15 +679,15 @@ internal partial class PopupWindow : Window
         EditTranslationIcon.Visibility = Visibility.Visible;
         SaveCorrectionIcon.Visibility = Visibility.Collapsed;
         _translatedText = translation;
+        _lastCompletedTranslation = new CompletedTranslation(
+            _currentTranslationSourceText,
+            _currentSourceLanguage,
+            translation,
+            _targetLanguage);
         _translationParagraph = null;
         _renderedTranslation = string.Empty;
         SetTranslationText(translation);
         ApplyUiLanguage(_uiLanguage);
-    }
-
-    private void EnablePinnedResize()
-    {
-        EnterManualSizeMode(updateLayout: true);
     }
 
     private void PopupSurface_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -678,7 +732,9 @@ internal partial class PopupWindow : Window
         var currentWidth = ActualWidth > 0 ? ActualWidth : Width;
         var currentHeight = ActualHeight > 0 ? ActualHeight : Height;
 
-        SizeToContent = SizeToContent.Manual;
+        _isAutomaticSizing = false;
+        _lastAutomaticSizeTextLength = 0;
+        ConfigureResizableLayout(_anchorPoint);
         if (!double.IsNaN(currentWidth) && currentWidth > 0)
         {
             Width = currentWidth;
@@ -688,9 +744,13 @@ internal partial class PopupWindow : Window
         {
             Height = currentHeight;
         }
+    }
 
-        MinWidth = 380;
-        MinHeight = 128;
+    private void ConfigureResizableLayout(ScreenPoint anchorPoint)
+    {
+        SizeToContent = SizeToContent.Manual;
+        MinWidth = PopupAutoSizeCalculator.MinimumWidth;
+        MinHeight = PopupAutoSizeCalculator.MinimumHeight;
         MaxWidth = double.PositiveInfinity;
         MaxHeight = double.PositiveInfinity;
         ContentRow.Height = new GridLength(1, GridUnitType.Star);
@@ -701,6 +761,53 @@ internal partial class PopupWindow : Window
         TranslationRichTextBox.Width = double.NaN;
         TranslationRichTextBox.Height = double.NaN;
         TranslationRichTextBox.MaxHeight = double.PositiveInfinity;
+        TranslationRichTextBox.MaxWidth = double.PositiveInfinity;
+
+        var screen = Forms.Screen.FromPoint(new System.Drawing.Point(anchorPoint.X, anchorPoint.Y));
+        var dpi = VisualTreeHelper.GetDpi(this);
+        MaxWidth = Math.Max(MinWidth, (screen.WorkingArea.Width - 16) / dpi.DpiScaleX);
+        MaxHeight = Math.Max(MinHeight, (screen.WorkingArea.Height - 16) / dpi.DpiScaleY);
+        PopupSurface.MaxWidth = MaxWidth;
+        PopupSurface.MaxHeight = MaxHeight;
+    }
+
+    private void ApplyAutomaticSize(string text, ScreenPoint anchorPoint, bool force)
+    {
+        if (!_isAutomaticSizing || IsPinned)
+        {
+            return;
+        }
+
+        if (!force
+            && IsVisible
+            && text.Length < _lastAutomaticSizeTextLength + AutomaticSizeGrowthThreshold)
+        {
+            return;
+        }
+
+        _lastAutomaticSizeTextLength = text.Length;
+        ConfigureResizableLayout(anchorPoint);
+        ActionBarSurface.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var targetSize = PopupAutoSizeCalculator.Calculate(
+            text,
+            FontSizeSlider.Value,
+            MaxWidth,
+            MaxHeight,
+            ActionBarSurface.DesiredSize.Width);
+
+        var currentWidth = IsVisible && ActualWidth > 0 ? ActualWidth : 0;
+        var currentHeight = IsVisible && ActualHeight > 0 ? ActualHeight : 0;
+        var targetWidth = Math.Max(currentWidth, targetSize.Width);
+        var targetHeight = Math.Max(currentHeight, targetSize.Height);
+        var sizeChanged = Math.Abs(Width - targetWidth) > 0.5
+                          || Math.Abs(Height - targetHeight) > 0.5;
+        Width = targetWidth;
+        Height = targetHeight;
+
+        if (sizeChanged && IsVisible)
+        {
+            SchedulePositionNearAnchor();
+        }
     }
 
     private async Task CopyWithFeedbackAsync(WpfButton button, string text)
@@ -888,6 +995,10 @@ internal partial class PopupWindow : Window
         }
 
         ApplyTranslationFontSize(e.NewValue);
+        if (_isAutomaticSizing && _translatedText.Length > 0)
+        {
+            ApplyAutomaticSize(_translatedText, _anchorPoint, force: true);
+        }
     }
 
     private void ApplyTranslationFontSize(double fontSize)
@@ -967,13 +1078,24 @@ internal partial class PopupWindow : Window
             return;
         }
 
+        SchedulePositionNearAnchor();
+    }
+
+    private void SchedulePositionNearAnchor()
+    {
+        if (_isRepositionPending)
+        {
+            return;
+        }
+
         _isRepositionPending = true;
         Dispatcher.BeginInvoke(
             () =>
             {
                 _isRepositionPending = false;
-                if (IsVisible && !IsPinned && SizeToContent != SizeToContent.Manual)
+                if (IsVisible && !IsPinned)
                 {
+                    UpdateLayout();
                     PositionNear(_anchorPoint);
                 }
             },
@@ -1002,6 +1124,9 @@ internal partial class PopupWindow : Window
         const int offsetX = 10;
         const int offsetY = 12;
         const int screenMargin = 8;
+
+        width = Math.Min(width, Math.Max(1, screen.WorkingArea.Width - (screenMargin * 2)));
+        height = Math.Min(height, Math.Max(1, screen.WorkingArea.Height - (screenMargin * 2)));
 
         var x = anchorPoint.X + offsetX;
         var y = anchorPoint.Y + offsetY;
@@ -1048,4 +1173,10 @@ internal partial class PopupWindow : Window
         Failure,
         CustomFailure,
     }
+
+    private readonly record struct CompletedTranslation(
+        string SourceText,
+        string SourceLanguage,
+        string TranslatedText,
+        string TargetLanguage);
 }

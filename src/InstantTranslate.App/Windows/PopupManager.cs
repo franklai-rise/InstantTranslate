@@ -30,6 +30,14 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
 
     public event Func<PopupTranslationCorrection, bool>? TranslationCorrectionRequested;
 
+    public string CreateStatusReport(bool useChinese)
+    {
+        var pinnedCount = _windows.Values.Count(window => window.IsPinned);
+        return useChinese
+            ? $"浮窗状态{Environment.NewLine}总数：{_windows.Count}{Environment.NewLine}保留：{pinnedCount}"
+            : $"Popup status{Environment.NewLine}Total: {_windows.Count}{Environment.NewLine}Pinned: {pinnedCount}";
+    }
+
     public void ShowLoading(long requestId, ScreenPoint anchorPoint)
     {
         var window = GetOrCreateWindow(requestId);
@@ -100,6 +108,19 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
         if (_transientRequestId is not { } requestId
             || !_windows.TryGetValue(requestId, out var window)
             || window.IsPinned)
+        {
+            return;
+        }
+
+        window.Close();
+    }
+
+    public void HideTransientPopupIfOutside(ScreenPoint point)
+    {
+        if (_transientRequestId is not { } requestId
+            || !_windows.TryGetValue(requestId, out var window)
+            || window.IsPinned
+            || window.ContainsScreenPoint(point))
         {
             return;
         }
@@ -193,6 +214,7 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
         {
             // Unpinning keeps this result visible, but returns it to the normal
             // transient lifecycle so the next outside click can dismiss it.
+            CloseOtherTransient(window.RequestId);
             _transientRequestId = window.RequestId;
         }
     }

@@ -13,6 +13,7 @@ namespace InstantTranslate.Selection;
 internal sealed class NativeSelectionReader : ISelectionReader
 {
     private const int MaximumTextLength = 20000;
+    private const int MaximumDocumentPrefixLength = 2_000_000;
     private const uint MessageTimeoutMilliseconds = 60;
     private const int MaximumAncestorDepth = 8;
 
@@ -55,11 +56,12 @@ internal sealed class NativeSelectionReader : ISelectionReader
             }
             else if (IsScintillaControl(className))
             {
-                var selectedText = TryReadScintillaSelection(current);
-                if (!string.IsNullOrWhiteSpace(selectedText))
-                {
-                    return selectedText;
-                }
+                // Avoid SCI_GETSELTEXT: custom messages above WM_USER do not
+                // marshal pointers cross-process. Scintilla still implements the
+                // system EM_GETSEL/WM_GETTEXT compatibility path, which Windows
+                // can marshal safely with the same bounded reader used for Edit.
+                var selectedText = TryReadEditRangeSelection(current);
+                return string.IsNullOrWhiteSpace(selectedText) ? null : selectedText;
             }
 
             current = NativeMethods.GetParent(current);
@@ -94,31 +96,11 @@ internal sealed class NativeSelectionReader : ISelectionReader
 
     private static string? TryReadEditSelection(IntPtr windowHandle)
     {
-        var buffer = Marshal.AllocHGlobal((MaximumTextLength + 1) * sizeof(char));
-        try
-        {
-            var bufferSize = (MaximumTextLength + 1) * sizeof(char);
-            Marshal.Copy(new byte[bufferSize], 0, buffer, bufferSize);
-            var sent = NativeMethods.SendMessageTimeout(
-                windowHandle,
-                NativeMethods.EmGetSelText,
-                UIntPtr.Zero,
-                buffer,
-                NativeMethods.SmtoAbortIfHung,
-                MessageTimeoutMilliseconds,
-                out _);
-            if (sent == IntPtr.Zero)
-            {
-                return TryReadEditRangeSelection(windowHandle);
-            }
-
-            return NormalizeBuffer(buffer, MaximumTextLength)
-                ?? TryReadEditRangeSelection(windowHandle);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(buffer);
-        }
+        // EM_GETSELTEXT has no buffer-length parameter. Sending it directly to
+        // another process with a fixed local buffer lets a long selection write
+        // past that allocation. EM_GETSEL followed by the bounded WM_GETTEXT
+        // system message is slower but is safely marshalled and length-limited.
+        return TryReadEditRangeSelection(windowHandle);
     }
 
     private static string? TryReadEditRangeSelection(IntPtr windowHandle)
@@ -142,18 +124,17 @@ internal sealed class NativeSelectionReader : ISelectionReader
 
             var start = Marshal.ReadInt32(startPointer);
             var end = Marshal.ReadInt32(endPointer);
-            if (end <= start)
-            {
-                return null;
-            }
-
             var textLength = TryGetWindowTextLength(windowHandle);
-            if (textLength <= start)
+            if (!TryCalculateBoundedRead(
+                    start,
+                    end,
+                    textLength,
+                    out var requestedEnd,
+                    out var bufferLength))
             {
                 return null;
             }
 
-            var bufferLength = Math.Min(textLength, MaximumTextLength * 4) + 1;
             var textBuffer = Marshal.AllocHGlobal(bufferLength * sizeof(char));
             try
             {
@@ -172,14 +153,14 @@ internal sealed class NativeSelectionReader : ISelectionReader
                     return null;
                 }
 
-                var wholeText = Marshal.PtrToStringUni(textBuffer, bufferLength);
+                var wholeText = Marshal.PtrToStringUni(textBuffer);
                 if (string.IsNullOrEmpty(wholeText))
                 {
                     return null;
                 }
 
                 var safeStart = Math.Clamp(start, 0, wholeText.Length);
-                var safeEnd = Math.Clamp(end, safeStart, wholeText.Length);
+                var safeEnd = Math.Clamp(requestedEnd, safeStart, wholeText.Length);
                 return TextNormalizer.Normalize(wholeText[safeStart..safeEnd]);
             }
             finally
@@ -209,57 +190,42 @@ internal sealed class NativeSelectionReader : ISelectionReader
             return 0;
         }
 
-        return (int)Math.Min(result.ToUInt64(), MaximumTextLength * 4);
+        return (int)Math.Min(result.ToUInt64(), MaximumDocumentPrefixLength);
+    }
+
+    internal static bool TryCalculateBoundedRead(
+        int selectionStart,
+        int selectionEnd,
+        int textLength,
+        out int requestedEnd,
+        out int bufferLength)
+    {
+        requestedEnd = 0;
+        bufferLength = 0;
+        if (selectionStart < 0 || selectionEnd <= selectionStart || textLength <= selectionStart)
+        {
+            return false;
+        }
+
+        requestedEnd = (int)Math.Min(
+            (long)selectionEnd,
+            (long)selectionStart + MaximumTextLength);
+        var lastCharacterToRead = Math.Min(
+            textLength,
+            Math.Min(requestedEnd, MaximumDocumentPrefixLength));
+        if (lastCharacterToRead <= selectionStart)
+        {
+            requestedEnd = 0;
+            return false;
+        }
+
+        bufferLength = lastCharacterToRead + 1;
+        return true;
     }
 
     private static UIntPtr ToUIntPtr(IntPtr pointer)
     {
         return new UIntPtr(unchecked((ulong)pointer.ToInt64()));
-    }
-
-    private static string? TryReadScintillaSelection(IntPtr windowHandle)
-    {
-        // Scintilla stores document text as UTF-8, even in a Unicode process.
-        var buffer = Marshal.AllocHGlobal(MaximumTextLength + 1);
-        try
-        {
-            var bufferSize = MaximumTextLength + 1;
-            Marshal.Copy(new byte[bufferSize], 0, buffer, bufferSize);
-            var sent = NativeMethods.SendMessageTimeout(
-                windowHandle,
-                NativeMethods.SciGetSelText,
-                UIntPtr.Zero,
-                buffer,
-                NativeMethods.SmtoAbortIfHung,
-                MessageTimeoutMilliseconds,
-                out _);
-            if (sent == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            var bytes = new byte[MaximumTextLength + 1];
-            Marshal.Copy(buffer, bytes, 0, bytes.Length);
-            var length = Array.IndexOf(bytes, (byte)0);
-            if (length <= 0)
-            {
-                return null;
-            }
-
-            return TextNormalizer.Normalize(Encoding.UTF8.GetString(bytes, 0, length));
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(buffer);
-        }
-    }
-
-    private static string? NormalizeBuffer(IntPtr buffer, int maximumLength)
-    {
-        var text = Marshal.PtrToStringUni(buffer, maximumLength);
-        return string.IsNullOrWhiteSpace(text)
-            ? null
-            : TextNormalizer.Normalize(text);
     }
 
     private static string GetClassName(IntPtr windowHandle)

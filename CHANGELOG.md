@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.5.4 - 2026-08-23
+
+### Fixed
+
+- Moved the top and upper-corner resize targets from the detached action toolbar to the visible top edge of the translation surface.
+
+## 0.5.3 - 2026-08-23
+
+### Changed
+
+- Dismissed an unpinned popup immediately after a physical left click outside that popup while keeping every pinned result intact.
+- Enabled four-edge and four-corner resizing before pinning, with a larger resize hit target.
+- Added content-aware initial sizing that grows with mixed Chinese/English text, explicit line breaks, and the selected font size while staying within the active monitor and retaining vertical scrolling for long results.
+
+## 0.5.2 - 2026-08-23
+
+### Fixed
+
+- Moved hit testing and subscriber work out of the low-level mouse callback, serialized hook lifecycle changes, added session and 15-minute rebind recovery, and made the global hotkey recover after an unexpected message-loop exit.
+- Isolated UI Automation reads by target process, bounded physical reads, enabled best-effort COM call cancellation, and continued to safe native fallbacks after target-provider faults.
+- Stopped ordinary external clicks from canceling a translation, bounded duplicate in-flight waits, and ensured joined or empty-result failures have a request window that can display an error.
+- Retried DeepSeek connection timeouts that arrive as uncancelled `OperationCanceledException`, classified stream disconnects, and retried a stream failure only before any content has been emitted.
+- Loaded Windows credentials off the startup/UI thread and prevented delayed credential recovery or a stale settings dialog from deleting a valid API key.
+- Released the single-instance claim before lengthy shutdown cleanup, added activation acknowledgement, and extended graceful takeover so immediate relaunch no longer leaves both processes closed.
+- Fixed canceling a pinned popup when another transient popup exists, preserved the last complete result after a failed retranslation, and kept language reversal disabled until streaming completes.
+- Enabled explicit Per-Monitor V2 DPI awareness, bounded popup size to the current work area, and allowed manually widened text content to use the full window width.
+- Prevented unreadable encrypted translation memory from being overwritten and restored safe non-clipboard Scintilla selection reading through system messages.
+
+### Added
+
+- Added a small rotating, privacy-safe lifecycle journal plus UIA and popup counts to copied diagnostics. These records never include selected text, translations, API keys, endpoints, or paths.
+- Added regression coverage for credential startup, UIA slot poisoning, network/VPN timeout recovery, stream disconnects, shutdown takeover, malformed settings, and corrupt translation memory.
+
+## 0.5.1 - 2026-08-23
+
+### Fixed
+
+- Made global mouse capture recover automatically when Windows is still completing login, when the native hook exits unexpectedly, or when the user explicitly chooses the tray repair command.
+- Kept the app resident and retried input capture instead of closing the whole application when the first hook binding is temporarily unavailable.
+
+### Added
+
+- Added a tray command to repair input capture without exiting the app.
+- Added privacy-safe input-capture status to diagnostics: hook state and the time of the most recent physical mouse-button event only. It never includes selected text, translations, API credentials, endpoints, or paths.
+
 ## 0.5.0 - 2026-08-19
 
 ### Added

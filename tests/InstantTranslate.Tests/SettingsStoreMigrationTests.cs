@@ -1,10 +1,32 @@
 using System.Text.Json;
+using System.IO;
 using InstantTranslate.Settings;
 
 namespace InstantTranslate.Tests;
 
 public sealed class SettingsStoreMigrationTests
 {
+    [Fact]
+    public void LoadPreferences_MalformedJsonReportsFailureWithoutReadingCredential()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"InstantTranslate-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, "{ malformed");
+        try
+        {
+            var store = new SettingsStore(new NeverReadApiKeyStore(), path);
+
+            var settings = store.LoadPreferences();
+
+            Assert.True(store.SettingsReadFailed);
+            Assert.Equal("deepseek", settings.ProviderId);
+            Assert.Empty(settings.DeepSeekApiKey);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Fact]
     public void NormalizeSettings_OldJson_AddsNewDefaultsWithoutChangingExistingValues()
     {
@@ -71,5 +93,35 @@ public sealed class SettingsStoreMigrationTests
         Assert.Equal("zh-CN", normalized.UiLanguage);
         Assert.Equal("Source Sans Pro", normalized.EnglishTranslationFontFamily);
         Assert.Equal("SimHei", normalized.ChineseTranslationFontFamily);
+    }
+
+    [Fact]
+    public void NormalizeSettings_NullProviderValues_FallBackToSafeDefaults()
+    {
+        var settings = AppSettings.Default with
+        {
+            ProviderId = null!,
+            DeepSeekEndpoint = null!,
+            DeepSeekModel = null!,
+            SourceLanguage = null!,
+            TargetLanguage = null!,
+            TargetLanguageMode = null!,
+        };
+
+        var normalized = SettingsStore.NormalizeSettings(settings);
+
+        Assert.Equal("deepseek", normalized.ProviderId);
+        Assert.Equal("https://api.deepseek.com", normalized.DeepSeekEndpoint);
+        Assert.Equal("deepseek-v4-flash", normalized.DeepSeekModel);
+        Assert.Equal("自动检测", normalized.SourceLanguage);
+        Assert.Equal("简体中文", normalized.TargetLanguage);
+        Assert.Equal("auto", normalized.TargetLanguageMode);
+    }
+
+    private sealed class NeverReadApiKeyStore : IApiKeyStore
+    {
+        public string ReadApiKey() => throw new InvalidOperationException("Must not be called.");
+
+        public void SaveApiKey(string apiKey) => throw new InvalidOperationException("Must not be called.");
     }
 }

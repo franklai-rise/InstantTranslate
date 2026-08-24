@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.IO;
 using InstantTranslate.Translation;
 
 namespace InstantTranslate.Tests;
@@ -187,6 +188,82 @@ public sealed class DeepSeekStreamingProviderTests
     }
 
     [Fact]
+    public async Task TranslateAsync_RetriesConnectTimeoutWhenCallerWasNotCancelled()
+    {
+        var attempt = 0;
+        var handler = new RecordingHandler(_ =>
+        {
+            attempt++;
+            if (attempt <= 2)
+            {
+                throw new TaskCanceledException("simulated connect timeout");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"恢复\"}}]}\n\ndata: [DONE]\n\n",
+                    Encoding.UTF8,
+                    "text/event-stream"),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var provider = CreateProvider(httpClient);
+        var text = new StringBuilder();
+
+        await foreach (var chunk in provider.TranslateAsync(
+                           new TranslationRequest("Hello", "英语", "简体中文"),
+                           CancellationToken.None))
+        {
+            text.Append(chunk.TextDelta);
+        }
+
+        Assert.Equal("恢复", text.ToString());
+        Assert.Equal(3, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task TranslateAsync_RetriesStreamFailureBeforeFirstContent()
+    {
+        var attempt = 0;
+        var handler = new RecordingHandler(_ =>
+        {
+            attempt++;
+            if (attempt <= 2)
+            {
+                var failedContent = new StreamContent(new ThrowingReadStream());
+                failedContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+                    "text/event-stream");
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = failedContent,
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"流恢复\"}}]}\n\ndata: [DONE]\n\n",
+                    Encoding.UTF8,
+                    "text/event-stream"),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var provider = CreateProvider(httpClient);
+        var text = new StringBuilder();
+
+        await foreach (var chunk in provider.TranslateAsync(
+                           new TranslationRequest("Hello", "英语", "简体中文"),
+                           CancellationToken.None))
+        {
+            text.Append(chunk.TextDelta);
+        }
+
+        Assert.Equal("流恢复", text.ToString());
+        Assert.Equal(3, handler.RequestCount);
+    }
+
+    [Fact]
     public async Task TranslateAsync_OnSuccessfulJsonResponse_ReportsNonStreamingError()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -271,5 +348,40 @@ public sealed class DeepSeekStreamingProviderTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return responseFactory(request);
         }
+    }
+
+    private sealed class ThrowingReadStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new IOException("Simulated response stream failure.");
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<int>(new IOException("Simulated response stream failure."));
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

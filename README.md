@@ -10,12 +10,31 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 
 ## 15 秒开始使用
 
-1. 下载并解压 `InstantTranslate-v0.5.0-win-x64.zip`。
+1. 下载并解压 `InstantTranslate-v0.5.4-win-x64.zip`。
 2. 运行 `InstantTranslate.exe`；首次启动会打开设置。
 3. 填写 DeepSeek API Key，点击“Test connection”（切换中文后为“测试连接”），成功后保存。
 4. 在记事本、浏览器或文档中用鼠标拖选文字。
 
 程序常驻系统托盘。再次双击 EXE 不会重复安装鼠标钩子，而会唤起已有实例的设置页。
+
+## v0.5.4 上边缘缩放
+
+- 上边缘及两个上角的缩放命中线现在位于灰色译文框顶部，不再位于外置功能按钮区顶部。
+
+## v0.5.3 浮窗交互
+
+- 未置顶浮窗在点击窗口之外时立即关闭；点击窗口本身、正文、按钮或缩放边缘不会误关。
+- 未置顶和置顶状态都可以从四边、四角直接拖动调整尺寸，命中区域更容易操作。
+- 首次显示会根据中英文字符宽度、换行、字体大小和屏幕可用区域自动扩展；超长内容保持在屏幕内并使用滚动条。
+
+## v0.5.2 稳定性修复
+
+- 鼠标钩子回调现在只投递轻量事件，耗时的命中测试与划词处理在有序工作线程中完成；登录、解锁、唤醒及长时间运行都会自动恢复输入捕获。
+- UI Automation 取词按目标进程隔离，对卡死的第三方 Provider 进行有界读取与 COM 取消，并继续尝试安全的 Win32 回退。
+- DeepSeek 在开机网络未就绪、VPN 切换、连接超时或首段内容前断流时会正确重试，不再被误判为用户取消。
+- 退出后立即重开、延迟读取凭据、相同请求合并、取消置顶与重译失败等生命周期竞态已修复。
+- 托盘新增“Repair input capture / 修复划词捕获”，无需退出程序即可重新绑定全局鼠标捕获。
+- “Copy performance diagnostics / 复制性能诊断”现在还包含输入、UIA 通道、浮窗数量与小型轮转生命周期记录，不包含原文、译文、API Key、Endpoint 或文件路径。
 
 ## v0.5 亮点
 
@@ -98,6 +117,7 @@ API Key 由密码框录入并保存在 Windows 凭据管理器中，不写入设
 - 翻译剪贴板（`Ctrl+Shift+T`）
 - 启用或暂停自动划词
 - 设置
+- 修复划词捕获（无需退出程序）
 - 复制性能诊断（只含耗时与结果状态，不含任何翻译文本）
 - 关于与版本
 - 退出
@@ -111,7 +131,7 @@ API Key 由密码框录入并保存在 Windows 凭据管理器中，不写入设
 - 默认不持久化原文、译文或运行日志。只有点击浮窗编辑按钮并保存的修正，才会进入翻译记忆。
 - 翻译记忆最多保存 200 条，使用 Windows DPAPI 绑定当前 Windows 账户加密。精确命中在本机直接返回；相关请求最多向 Provider 发送 3 组你主动保存的示例。设置页可永久清空。
 - 缓存只存在于当前进程内，默认最多 128 条、约 100 万字符预算、20 分钟有效；键中只保留原文指纹而非原文全文，退出即清空。
-- 性能诊断只在内存保留最近 100 组数值和状态，不采集原文、译文、凭据、Endpoint 或路径；仅在你选择托盘命令时复制到剪贴板。
+  - 性能诊断只在内存保留最近 100 组数值和状态；输入捕获诊断仅记录钩子是否运行和最近一次物理鼠标按键时间，不采集原文、译文、凭据、Endpoint 或路径；仅在你选择托盘命令时复制到剪贴板。
 - API Key 保存在 Windows Credential Manager 的 `InstantTranslate/DeepSeekApiKey`。
 - 自动取词默认不注入键盘、不修改剪贴板；终端应用始终禁用自动剪贴板回退。若确实需要兼容自绘应用，可在设置中主动打开兼容模式。
 - 跨窗口或跨进程拖动会被拒绝，UI Automation 焦点候选也必须属于鼠标命中的同一进程。
@@ -143,7 +163,7 @@ dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --co
 ## 打包
 
 ```powershell
-.\scripts\Publish.ps1 -Version 0.5.0
+.\scripts\Publish.ps1 -Version 0.5.4
 ```
 
 脚本会依次恢复依赖、Release 构建、运行全部测试、发布自包含单文件程序、执行烟雾测试、生成 ZIP 和 SHA-256 校验文件。结果位于 `artifacts/release/`。
@@ -151,7 +171,7 @@ dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --co
 如已在 Windows 证书存储中安装带私钥的代码签名证书，可选签名并验证成品：
 
 ```powershell
-.\scripts\Publish.ps1 -Version 0.5.0 -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
+.\scripts\Publish.ps1 -Version 0.5.4 -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
 ```
 
 也可使用 `-CertificateStoreLocation LocalMachine`、`-TimestampUrl` 或 `-SignToolPath` 指定企业环境。没有证书时成品仍为未签名程序，在部分电脑上首次运行可能出现 Windows SmartScreen“未知发布者”提示。Microsoft Store / MSIX 发布仍需要开发者账户及与该账户匹配的包身份，脚本不会伪造这些信息。

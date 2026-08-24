@@ -94,28 +94,23 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             DispatcherPriority.Send);
     }
 
+    private void OnSelectionGestureCompleted(SelectionGesture gesture)
+    {
+        _dispatcher.BeginInvoke(
+            () => BeginSelectionIfExternal(gesture),
+            DispatcherPriority.Send);
+    }
+
     private void OnMousePressed(ScreenPoint point)
     {
         _dispatcher.BeginInvoke(
             () =>
             {
-                if (_disposed
-                    || _popupPresenter.IsPointOverPopup(point)
-                    || WindowProcessResolver.IsCurrentProcessAt(point))
+                if (!_disposed)
                 {
-                    return;
+                    _popupPresenter.HideTransientPopupIfOutside(point);
                 }
-
-                _requestGate.CancelActive();
-                _popupPresenter.HideTransientPopup();
             },
-            DispatcherPriority.Send);
-    }
-
-    private void OnSelectionGestureCompleted(SelectionGesture gesture)
-    {
-        _dispatcher.BeginInvoke(
-            () => BeginSelectionIfExternal(gesture),
             DispatcherPriority.Send);
     }
 
@@ -126,7 +121,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             || WindowProcessResolver.IsCurrentProcessAt(gesture.Start)
             || _popupPresenter.IsPointOverPopup(gesture.End)
             || WindowProcessResolver.IsCurrentProcessAt(gesture.End)
-            || !WindowProcessResolver.ArePointsInSameExternalProcess(gesture.Start, gesture.End))
+            || !WindowProcessResolver.ArePointsInSameExternalWindow(gesture.Start, gesture.End))
         {
             return;
         }
@@ -497,12 +492,23 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                && pendingTranslation is not null)
         {
             performance.MarkCoalesced();
+            await _dispatcher.InvokeAsync(
+                () => _popupPresenter.ShowLoading(requestId, anchorPoint),
+                DispatcherPriority.Send,
+                cancellationToken);
             string sharedTranslation;
             try
             {
                 sharedTranslation = await pendingTranslation
-                    .WaitAsync(cancellationToken)
+                    .WaitAsync(TranslationTimeout, cancellationToken)
                     .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // A failed owner must not strand every identical request. Drop
+                // the stale registry entry and let this caller take ownership.
+                _inFlightTranslations.TryRemove(cacheKey, pendingTranslation);
+                continue;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -582,7 +588,14 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             if (translation is null)
             {
                 sharedCompletion.TrySetCanceled(cancellationToken);
-                return TranslationOutcome.Cancelled;
+                if (cancellationToken.IsCancellationRequested || !canPresent())
+                {
+                    return TranslationOutcome.Cancelled;
+                }
+
+                throw new TranslationProviderException(
+                    "DeepSeek 未返回可用的译文内容。",
+                    TranslationFailureKind.Server);
             }
 
             sharedCompletion.TrySetResult(translation);

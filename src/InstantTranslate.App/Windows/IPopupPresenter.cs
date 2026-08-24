@@ -44,4 +44,6 @@ internal interface IPopupPresenter
 
     void HideTransientPopup();
 
+    void HideTransientPopupIfOutside(ScreenPoint point);
+
 }

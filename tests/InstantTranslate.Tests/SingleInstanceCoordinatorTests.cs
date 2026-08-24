@@ -1,4 +1,5 @@
 using InstantTranslate.Services;
+using System.Diagnostics;
 
 namespace InstantTranslate.Tests;
 
@@ -54,6 +55,58 @@ public sealed class SingleInstanceCoordinatorTests
 
         using var replacement = SingleInstanceCoordinator.Acquire(instanceName);
         Assert.True(replacement.IsPrimary);
+    }
+
+    [Fact]
+    public async Task TakeoverRetry_BecomesPrimaryWhenPreviousInstanceFinishesExiting()
+    {
+        var instanceName = CreateUniqueInstanceName();
+        var primary = SingleInstanceCoordinator.Acquire(instanceName);
+        var releaseTask = Task.Run(async () =>
+        {
+            await Task.Delay(180);
+            primary.Dispose();
+        });
+
+        using var replacement = SingleInstanceCoordinator.AcquireWithTakeoverRetry(
+            instanceName,
+            retryCount: 30,
+            retryDelay: TimeSpan.FromMilliseconds(40));
+
+        Assert.True(replacement.IsPrimary);
+        await releaseTask.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public void TakeoverRetry_RemainsSecondaryWhilePrimaryIsHealthy()
+    {
+        var instanceName = CreateUniqueInstanceName();
+        using var primary = SingleInstanceCoordinator.Acquire(instanceName);
+        using var secondary = SingleInstanceCoordinator.AcquireWithTakeoverRetry(
+            instanceName,
+            retryCount: 2,
+            retryDelay: TimeSpan.FromMilliseconds(1));
+
+        Assert.True(primary.IsPrimary);
+        Assert.False(secondary.IsPrimary);
+    }
+
+    [Fact]
+    public void TakeoverRetry_ReturnsPromptlyAfterPrimaryAcknowledgesActivation()
+    {
+        var instanceName = CreateUniqueInstanceName();
+        using var primary = SingleInstanceCoordinator.Acquire(instanceName);
+        primary.StartListening(() => { });
+        var startedAt = Stopwatch.GetTimestamp();
+
+        using var secondary = SingleInstanceCoordinator.AcquireWithTakeoverRetry(
+            instanceName,
+            retryCount: 30,
+            retryDelay: TimeSpan.FromMilliseconds(120));
+
+        Assert.False(secondary.IsPrimary);
+        Assert.True(secondary.WasActivationAcknowledged);
+        Assert.True(Stopwatch.GetElapsedTime(startedAt) < TimeSpan.FromSeconds(1));
     }
 
     [Fact]

@@ -55,9 +55,24 @@ internal sealed class DeepSeekStreamingProvider : IDeepSeekStreamingProvider
                     HttpCompletionOption.ResponseHeadersRead,
                     cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (OperationCanceledException) when (attempt < MaximumAttempts - 1)
+            {
+                // SocketsHttpHandler.ConnectTimeout is surfaced as an OCE even
+                // though the caller's token remains active. Treat that as a
+                // transient network timeout, not as a user cancellation.
+                await Task.Delay(GetNetworkRetryDelay(attempt), cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+            catch (OperationCanceledException exception)
+            {
+                throw new TranslationProviderException(
+                    "连接 DeepSeek API 超时，请检查网络或 VPN。",
+                    exception,
+                    TranslationFailureKind.Timeout);
             }
             catch (HttpRequestException) when (attempt < MaximumAttempts - 1)
             {
@@ -98,74 +113,140 @@ internal sealed class DeepSeekStreamingProvider : IDeepSeekStreamingProvider
                         TranslationFailureKind.Protocol);
                 }
 
-                await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                using var reader = new StreamReader(responseStream);
                 var receivedContent = false;
-
-                while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+                var retryStream = false;
+                await using var streamEnumerator = ReadSseChunksAsync(
+                        response.Content,
+                        cancellationToken)
+                    .GetAsyncEnumerator(cancellationToken);
+                while (true)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    bool hasNext;
+                    try
                     {
-                        continue;
+                        hasNext = await streamEnumerator.MoveNextAsync().ConfigureAwait(false);
                     }
-
-                    var payload = line["data:".Length..].TrimStart();
-                    if (payload.Length == 0)
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
-                        continue;
+                        throw;
                     }
-
-                    if (payload.Equals("[DONE]", StringComparison.Ordinal))
+                    catch (Exception exception) when (IsTransientStreamFailure(exception))
                     {
-                        if (!receivedContent)
+                        if (!receivedContent && attempt < MaximumAttempts - 1)
                         {
-                            throw new TranslationProviderException(
-                                "DeepSeek API 未返回译文内容。",
-                                TranslationFailureKind.Server);
+                            retryStream = true;
+                            break;
                         }
 
-                        yield return new TranslationChunk(string.Empty, IsFinal: true);
+                        throw new TranslationProviderException(
+                            receivedContent
+                                ? "DeepSeek 流式连接中断，请重试。"
+                                : "无法读取 DeepSeek 流式响应，请检查网络或 VPN。",
+                            exception,
+                            TranslationFailureKind.Connectivity);
+                    }
+
+                    if (!hasNext)
+                    {
                         yield break;
                     }
 
-                    string? content;
-                    try
+                    var chunk = streamEnumerator.Current;
+                    if (!string.IsNullOrEmpty(chunk.TextDelta))
                     {
-                        content = ReadContentDelta(payload);
-                    }
-                    catch (JsonException exception)
-                    {
-                        throw new TranslationProviderException(
-                            "DeepSeek 返回了无法解析的流式数据。",
-                            exception,
-                            TranslationFailureKind.Protocol);
+                        receivedContent = true;
                     }
 
-                    if (string.IsNullOrEmpty(content))
-                    {
-                        continue;
-                    }
-
-                    receivedContent = true;
-                    yield return new TranslationChunk(content);
+                    yield return chunk;
                 }
 
-                if (!receivedContent)
+                if (retryStream)
                 {
-                    throw new TranslationProviderException(
-                        "DeepSeek 流式响应意外结束，未收到译文。",
-                        TranslationFailureKind.Server);
+                    await Task.Delay(GetNetworkRetryDelay(attempt), cancellationToken).ConfigureAwait(false);
+                    continue;
                 }
-
-                yield return new TranslationChunk(string.Empty, IsFinal: true);
-                yield break;
             }
         }
 
         throw new TranslationProviderException(
             "无法连接 DeepSeek API，请检查网络和 Endpoint。",
             TranslationFailureKind.Connectivity);
+    }
+
+    private static async IAsyncEnumerable<TranslationChunk> ReadSseChunksAsync(
+        HttpContent content,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await using var responseStream = await content
+            .ReadAsStreamAsync(cancellationToken)
+            .ConfigureAwait(false);
+        using var reader = new StreamReader(responseStream);
+        var receivedContent = false;
+
+        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var payload = line["data:".Length..].TrimStart();
+            if (payload.Length == 0)
+            {
+                continue;
+            }
+
+            if (payload.Equals("[DONE]", StringComparison.Ordinal))
+            {
+                if (!receivedContent)
+                {
+                    throw new TranslationProviderException(
+                        "DeepSeek API 未返回译文内容。",
+                        TranslationFailureKind.Server);
+                }
+
+                yield return new TranslationChunk(string.Empty, IsFinal: true);
+                yield break;
+            }
+
+            string? delta;
+            try
+            {
+                delta = ReadContentDelta(payload);
+            }
+            catch (JsonException exception)
+            {
+                throw new TranslationProviderException(
+                    "DeepSeek 返回了无法解析的流式数据。",
+                    exception,
+                    TranslationFailureKind.Protocol);
+            }
+
+            if (string.IsNullOrEmpty(delta))
+            {
+                continue;
+            }
+
+            receivedContent = true;
+            yield return new TranslationChunk(delta);
+        }
+
+        if (!receivedContent)
+        {
+            throw new TranslationProviderException(
+                "DeepSeek 流式响应意外结束，未收到译文。",
+                TranslationFailureKind.Server);
+        }
+
+        yield return new TranslationChunk(string.Empty, IsFinal: true);
+    }
+
+    private static bool IsTransientStreamFailure(Exception exception)
+    {
+        return exception is HttpRequestException
+            or IOException
+            or OperationCanceledException;
     }
 
     internal static Uri BuildChatCompletionsUri(Uri endpoint)

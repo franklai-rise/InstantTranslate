@@ -41,6 +41,7 @@ internal sealed class TranslationMemoryStore
     internal const int MaximumTargetLength = 20_000;
     internal const int DefaultRelevantLimit = 3;
     internal const int MaximumRelevantCharacterBudget = 2_400;
+    internal const long MaximumFileBytes = 4 * 1024 * 1024;
     internal const double MinimumRelevantSimilarity = 0.24;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -53,6 +54,7 @@ internal sealed class TranslationMemoryStore
     private readonly string _path;
     private readonly ITranslationMemoryProtector _protector;
     private readonly List<SavedTranslation> _entries;
+    private bool _loadFailed;
 
     public TranslationMemoryStore(
         string? path = null,
@@ -76,6 +78,8 @@ internal sealed class TranslationMemoryStore
             }
         }
     }
+
+    internal bool LoadFailed => _loadFailed;
 
     public SavedTranslation? FindExact(
         string sourceText,
@@ -175,6 +179,12 @@ internal sealed class TranslationMemoryStore
         var targetDirection = NormalizeLanguage(targetLanguage);
         lock (_syncRoot)
         {
+            if (_loadFailed)
+            {
+                throw new InvalidOperationException(
+                    "Translation memory could not be read; refusing to overwrite the existing file.");
+            }
+
             var previousEntries = _entries.ToArray();
             try
             {
@@ -213,6 +223,7 @@ internal sealed class TranslationMemoryStore
             }
 
             _entries.Clear();
+            _loadFailed = false;
         }
     }
 
@@ -274,6 +285,12 @@ internal sealed class TranslationMemoryStore
                 return [];
             }
 
+            var fileLength = new FileInfo(_path).Length;
+            if (fileLength is <= 0 or > MaximumFileBytes)
+            {
+                throw new InvalidDataException("Translation memory file has an invalid size.");
+            }
+
             var protectedData = File.ReadAllBytes(_path);
             var plaintext = _protector.Unprotect(protectedData);
             try
@@ -281,6 +298,7 @@ internal sealed class TranslationMemoryStore
                 var document = JsonSerializer.Deserialize<TranslationMemoryDocument>(plaintext, JsonOptions);
                 if (document?.Version != 1 || document.Entries is null)
                 {
+                    _loadFailed = true;
                     return [];
                 }
 
@@ -296,18 +314,22 @@ internal sealed class TranslationMemoryStore
         }
         catch (CryptographicException)
         {
+            _loadFailed = true;
             return [];
         }
         catch (JsonException)
         {
+            _loadFailed = true;
             return [];
         }
         catch (IOException)
         {
+            _loadFailed = true;
             return [];
         }
         catch (UnauthorizedAccessException)
         {
+            _loadFailed = true;
             return [];
         }
     }
