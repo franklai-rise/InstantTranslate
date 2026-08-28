@@ -19,5 +19,7 @@ public sealed class ThemeManagerAccessibilityTests
         Assert.Same(WpfSystemColors.HighlightTextBrush, resources["AccentTextBrush"]);
         Assert.Same(WpfSystemColors.WindowBrush, resources["AppWindowBackgroundBrush"]);
         Assert.Same(WpfSystemColors.WindowTextBrush, resources["AppTextBrush"]);
+        Assert.Same(WpfSystemColors.WindowBrush, resources["ExplanationSurfaceBrush"]);
+        Assert.Same(WpfSystemColors.HighlightBrush, resources["ExplanationHeaderBrush"]);
     }
 }

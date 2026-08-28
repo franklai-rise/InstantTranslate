@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+## 0.6.0 - 2026-08-28
+
+### Added
+
+- Added AI Explain for a completed translation. It can explain either the original selection or a selected passage in the translated text, streams a concise Chinese explanation, and keeps the result in the same popup.
+- Isolated explanation requests from translation requests, with per-window cancellation, a low-priority concurrency slot, timeout protection, retry, copy, and return controls.
+- Added an optional Bubble popup style in Settings. It uses an opaque pastel surface, soft shadow, rounded controls, and a tail that points toward the selection side while preserving the existing Minimal style as the default.
+- Added Bubble 2.0 as a separate popup style, with a fuller rounded silhouette, attached soft tail, white highlight, and opaque pastel blue, lavender, and pink surface.
+- Added a smooth local reveal queue for streamed translations and explanations: the first content remains immediate, then newly received text fills in progressively without waiting for the whole response.
+
+### Fixed
+
+- Clipped Bubble popup content and explanation overlays to the same rounded surface geometry so the two lower corners cannot expose square edges.
+- Retried safe UI Automation/native selection reads after mouse-up for Edge, Chromium, and Zotero document readers, and accepted same-process focused document nodes that do not expose a native window handle. This improves PDF selection pickup without enabling clipboard fallback.
+
+### Privacy
+
+- AI Explain content is never written to settings, translation memory, caches, or diagnostics.
+
 ## 0.5.4 - 2026-08-23
 
 ### Fixed

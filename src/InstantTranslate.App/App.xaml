@@ -1,6 +1,7 @@
 <Application x:Class="InstantTranslate.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:effects="clr-namespace:System.Windows.Media.Effects;assembly=PresentationCore"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
         <FontFamily x:Key="InterfaceFont">pack://application:,,,/Assets/Fonts/#Source Sans Pro</FontFamily>
@@ -28,5 +29,21 @@
         <SolidColorBrush x:Key="PopupTextBrush" Color="#1D1D1F" />
         <SolidColorBrush x:Key="PopupMutedBrush" Color="#6E6E73" />
         <SolidColorBrush x:Key="PopupBadgeBrush" Color="#2563EB" />
+        <SolidColorBrush x:Key="PopupHighlightBrush" Color="#00FFFFFF" />
+        <SolidColorBrush x:Key="PopupTailBrush" Color="#F7F7F8" />
+        <SolidColorBrush x:Key="PopupTailStrokeBrush" Color="#00FFFFFF" />
+        <CornerRadius x:Key="PopupSurfaceCornerRadius">12</CornerRadius>
+        <CornerRadius x:Key="PopupActionBarCornerRadius">11</CornerRadius>
+        <CornerRadius x:Key="PopupButtonCornerRadius">7</CornerRadius>
+        <effects:DropShadowEffect x:Key="PopupSurfaceShadowEffect"
+                                 BlurRadius="0"
+                                 ShadowDepth="0"
+                                 Opacity="0" />
+        <effects:DropShadowEffect x:Key="PopupActionBarShadowEffect"
+                                 BlurRadius="0"
+                                 ShadowDepth="0"
+                                 Opacity="0" />
+        <SolidColorBrush x:Key="ExplanationSurfaceBrush" Color="#EEF0F3" />
+        <SolidColorBrush x:Key="ExplanationHeaderBrush" Color="#E4E7EC" />
     </Application.Resources>
 </Application>

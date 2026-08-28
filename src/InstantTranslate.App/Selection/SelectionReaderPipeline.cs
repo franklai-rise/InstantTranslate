@@ -5,21 +5,32 @@ namespace InstantTranslate.Selection;
 internal sealed class SelectionReaderPipeline : IContextualSelectionReader
 {
     private static readonly TimeSpan PrimaryReadTimeout = TimeSpan.FromMilliseconds(800);
+    private static readonly TimeSpan[] StabilizedReadRetryDelays =
+    [
+        TimeSpan.FromMilliseconds(85),
+        TimeSpan.FromMilliseconds(170),
+    ];
     private readonly ISelectionReader _primaryReader;
     private readonly ISelectionReader _fallbackReader;
     private readonly ISelectionReader? _clipboardFallbackReader;
     private readonly Func<bool> _allowClipboardFallback;
+    private readonly Func<ScreenPoint, bool> _requiresStabilizedRead;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
 
     public SelectionReaderPipeline(
         ISelectionReader primaryReader,
         ISelectionReader fallbackReader,
         ISelectionReader? clipboardFallbackReader = null,
-        Func<bool>? allowClipboardFallback = null)
+        Func<bool>? allowClipboardFallback = null,
+        Func<ScreenPoint, bool>? requiresStabilizedRead = null,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
         _primaryReader = primaryReader ?? throw new ArgumentNullException(nameof(primaryReader));
         _fallbackReader = fallbackReader ?? throw new ArgumentNullException(nameof(fallbackReader));
         _clipboardFallbackReader = clipboardFallbackReader;
         _allowClipboardFallback = allowClipboardFallback ?? (() => true);
+        _requiresStabilizedRead = requiresStabilizedRead ?? (_ => false);
+        _delayAsync = delayAsync ?? Task.Delay;
     }
 
     public async Task<string?> TryReadSelectedTextAsync(
@@ -32,6 +43,50 @@ internal sealed class SelectionReaderPipeline : IContextualSelectionReader
     }
 
     public async Task<SelectionCapture?> TryReadSelectionAsync(
+        ScreenPoint point,
+        bool includeContext,
+        CancellationToken cancellationToken)
+    {
+        var retryDelays = _requiresStabilizedRead(point)
+            ? StabilizedReadRetryDelays
+            : Array.Empty<TimeSpan>();
+        for (var attempt = 0; ; attempt++)
+        {
+            var capture = await TryReadWithoutClipboardAsync(
+                    point,
+                    includeContext,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(capture?.Text))
+            {
+                return capture;
+            }
+
+            if (attempt >= retryDelays.Length)
+            {
+                break;
+            }
+
+            // Chromium/Electron PDF readers may commit their accessibility
+            // selection a fraction after mouse-up. Retry only their safe,
+            // non-clipboard paths before considering any compatibility fallback.
+            await _delayAsync(retryDelays[attempt], cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_clipboardFallbackReader is null || !_allowClipboardFallback())
+        {
+            return null;
+        }
+
+        var selectedText = await _clipboardFallbackReader
+            .TryReadSelectedTextAsync(point, cancellationToken)
+            .ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(selectedText)
+            ? null
+            : new SelectionCapture(selectedText);
+    }
+
+    private async Task<SelectionCapture?> TryReadWithoutClipboardAsync(
         ScreenPoint point,
         bool includeContext,
         CancellationToken cancellationToken)
@@ -82,18 +137,6 @@ internal sealed class SelectionReaderPipeline : IContextualSelectionReader
             .TryReadSelectedTextAsync(point, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!string.IsNullOrWhiteSpace(selectedText)
-            || _clipboardFallbackReader is null
-            || !_allowClipboardFallback())
-        {
-            return string.IsNullOrWhiteSpace(selectedText)
-                ? null
-                : new SelectionCapture(selectedText);
-        }
-
-        selectedText = await _clipboardFallbackReader
-            .TryReadSelectedTextAsync(point, cancellationToken)
-            .ConfigureAwait(false);
         return string.IsNullOrWhiteSpace(selectedText)
             ? null
             : new SelectionCapture(selectedText);

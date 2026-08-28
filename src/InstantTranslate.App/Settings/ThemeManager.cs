@@ -1,5 +1,10 @@
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
+using WpfBrushes = System.Windows.Media.Brushes;
+using WpfColor = System.Windows.Media.Color;
+using WpfColors = System.Windows.Media.Colors;
+using WpfPoint = System.Windows.Point;
 using WpfSystemColors = System.Windows.SystemColors;
 
 namespace InstantTranslate.Settings;
@@ -36,14 +41,9 @@ internal static class ThemeManager
         SetBrush(application.Resources, "AccentLightBrush", palette.AccentLight);
         SetBrush(application.Resources, "AccentTextBrush", "#FFFFFF");
         SetBrush(application.Resources, "SwitchKnobBrush", "#FFFFFF");
-        SetBrush(application.Resources, "PopupBackgroundBrush", palette.PopupBackground);
-        SetBrush(application.Resources, "PopupBorderBrush", palette.PopupBorder);
-        SetBrush(application.Resources, "PopupButtonBrush", palette.PopupButton);
-        SetBrush(application.Resources, "PopupButtonHoverBrush", palette.PopupButtonHover);
-        SetBrush(application.Resources, "PopupButtonBorderBrush", palette.PopupButtonBorder);
-        SetBrush(application.Resources, "PopupTextBrush", palette.PopupText);
-        SetBrush(application.Resources, "PopupMutedBrush", palette.PopupMuted);
-        SetBrush(application.Resources, "PopupBadgeBrush", palette.PopupBadge);
+        var popupVisualStyle = PopupVisualStyleCatalog.Normalize(settings.PopupVisualStyle);
+        ApplyPopupResources(application.Resources, palette, popupVisualStyle);
+        ApplyExplanationResources(application.Resources, popupVisualStyle);
     }
 
     internal static void ApplyHighContrast(ResourceDictionary resources)
@@ -71,6 +71,16 @@ internal static class ThemeManager
         SetBrush(resources, "PopupTextBrush", WpfSystemColors.WindowTextBrush);
         SetBrush(resources, "PopupMutedBrush", WpfSystemColors.GrayTextBrush);
         SetBrush(resources, "PopupBadgeBrush", WpfSystemColors.HighlightBrush);
+        SetBrush(resources, "PopupHighlightBrush", WpfSystemColors.WindowBrush);
+        SetBrush(resources, "PopupTailBrush", WpfSystemColors.WindowBrush);
+        SetBrush(resources, "PopupTailStrokeBrush", WpfSystemColors.WindowTextBrush);
+        SetCornerRadius(resources, "PopupSurfaceCornerRadius", new CornerRadius(0));
+        SetCornerRadius(resources, "PopupActionBarCornerRadius", new CornerRadius(0));
+        SetCornerRadius(resources, "PopupButtonCornerRadius", new CornerRadius(0));
+        SetEffect(resources, "PopupSurfaceShadowEffect", CreateShadow(WpfColors.Transparent, 0, 0, 0));
+        SetEffect(resources, "PopupActionBarShadowEffect", CreateShadow(WpfColors.Transparent, 0, 0, 0));
+        SetBrush(resources, "ExplanationSurfaceBrush", WpfSystemColors.WindowBrush);
+        SetBrush(resources, "ExplanationHeaderBrush", WpfSystemColors.HighlightBrush);
     }
 
     internal static SolidColorBrush CreateBrush(string colorValue)
@@ -81,6 +91,19 @@ internal static class ThemeManager
         return brush;
     }
 
+    internal static System.Windows.Media.Brush CreatePopupPreviewSurfaceBrush(
+        string? popupVisualStyle,
+        ThemePalette palette)
+    {
+        var style = PopupVisualStyleCatalog.Normalize(popupVisualStyle);
+        return style switch
+        {
+            PopupVisualStyleCatalog.BubbleStyleId => CreateBubbleSurfaceBrush(),
+            PopupVisualStyleCatalog.BubbleV2StyleId => CreateBubbleV2SurfaceBrush(),
+            _ => CreateBrush(palette.PopupBackground),
+        };
+    }
+
     private static void SetBrush(ResourceDictionary resources, string key, string colorValue)
     {
         resources[key] = CreateBrush(colorValue);
@@ -89,5 +112,243 @@ internal static class ThemeManager
     private static void SetBrush(ResourceDictionary resources, string key, System.Windows.Media.Brush brush)
     {
         resources[key] = brush;
+    }
+
+    private static void ApplyPopupResources(
+        ResourceDictionary resources,
+        ThemePalette palette,
+        string popupVisualStyle)
+    {
+        var normalizedStyle = PopupVisualStyleCatalog.Normalize(popupVisualStyle);
+        if (string.Equals(normalizedStyle, PopupVisualStyleCatalog.MinimalStyleId, StringComparison.Ordinal))
+        {
+            SetBrush(resources, "PopupBackgroundBrush", palette.PopupBackground);
+            SetBrush(resources, "PopupBorderBrush", palette.PopupBorder);
+            SetBrush(resources, "PopupButtonBrush", palette.PopupButton);
+            SetBrush(resources, "PopupButtonHoverBrush", palette.PopupButtonHover);
+            SetBrush(resources, "PopupButtonBorderBrush", palette.PopupButtonBorder);
+            SetBrush(resources, "PopupTextBrush", palette.PopupText);
+            SetBrush(resources, "PopupMutedBrush", palette.PopupMuted);
+            SetBrush(resources, "PopupBadgeBrush", palette.PopupBadge);
+            SetBrush(resources, "PopupHighlightBrush", WpfBrushes.Transparent);
+            SetBrush(resources, "PopupTailBrush", palette.PopupBackground);
+            SetBrush(resources, "PopupTailStrokeBrush", WpfBrushes.Transparent);
+            SetCornerRadius(resources, "PopupSurfaceCornerRadius", new CornerRadius(12));
+            SetCornerRadius(resources, "PopupActionBarCornerRadius", new CornerRadius(11));
+            SetCornerRadius(resources, "PopupButtonCornerRadius", new CornerRadius(7));
+            SetEffect(resources, "PopupSurfaceShadowEffect", CreateShadow(WpfColors.Transparent, 0, 0, 0));
+            SetEffect(resources, "PopupActionBarShadowEffect", CreateShadow(WpfColors.Transparent, 0, 0, 0));
+            return;
+        }
+
+        if (string.Equals(normalizedStyle, PopupVisualStyleCatalog.BubbleV2StyleId, StringComparison.Ordinal))
+        {
+            ApplyBubbleV2Resources(resources, palette);
+            return;
+        }
+
+        SetBrush(resources, "PopupBackgroundBrush", CreateBubbleSurfaceBrush());
+        SetBrush(resources, "PopupBorderBrush", "#C9D9EA");
+        SetBrush(resources, "PopupButtonBrush", "#FCFDFF");
+        SetBrush(resources, "PopupButtonHoverBrush", "#EAF3FE");
+        SetBrush(resources, "PopupButtonBorderBrush", "#BDD0E4");
+        SetBrush(resources, "PopupTextBrush", "#182235");
+        SetBrush(resources, "PopupMutedBrush", "#64748B");
+        SetBrush(resources, "PopupBadgeBrush", palette.Accent);
+        SetBrush(resources, "PopupHighlightBrush", CreateBubbleHighlightBrush());
+        SetBrush(resources, "PopupTailBrush", "#EEF7FF");
+        SetBrush(resources, "PopupTailStrokeBrush", WpfBrushes.Transparent);
+        SetCornerRadius(resources, "PopupSurfaceCornerRadius", new CornerRadius(28));
+        SetCornerRadius(resources, "PopupActionBarCornerRadius", new CornerRadius(18));
+        SetCornerRadius(resources, "PopupButtonCornerRadius", new CornerRadius(11));
+        SetEffect(resources, "PopupSurfaceShadowEffect", CreateShadow(WpfColor.FromRgb(47, 72, 108), 0.19, 22, 7));
+        SetEffect(resources, "PopupActionBarShadowEffect", CreateShadow(WpfColor.FromRgb(47, 72, 108), 0.10, 12, 4));
+    }
+
+    private static void ApplyBubbleV2Resources(ResourceDictionary resources, ThemePalette palette)
+    {
+        SetBrush(resources, "PopupBackgroundBrush", CreateBubbleV2SurfaceBrush());
+        SetBrush(resources, "PopupBorderBrush", WpfBrushes.Transparent);
+        SetBrush(resources, "PopupButtonBrush", CreateBubbleV2ButtonBrush());
+        SetBrush(resources, "PopupButtonHoverBrush", "#EAF0FF");
+        SetBrush(resources, "PopupButtonBorderBrush", "#DCE5FA");
+        SetBrush(resources, "PopupTextBrush", "#18213A");
+        SetBrush(resources, "PopupMutedBrush", "#62708D");
+        SetBrush(resources, "PopupBadgeBrush", palette.Accent);
+        SetBrush(resources, "PopupHighlightBrush", CreateBubbleV2HighlightBrush());
+        SetBrush(resources, "PopupTailBrush", "#F2F4FF");
+        SetBrush(resources, "PopupTailStrokeBrush", "#FFFFFF");
+        SetCornerRadius(resources, "PopupSurfaceCornerRadius", new CornerRadius(40));
+        SetCornerRadius(resources, "PopupActionBarCornerRadius", new CornerRadius(22));
+        SetCornerRadius(resources, "PopupButtonCornerRadius", new CornerRadius(12));
+        SetEffect(resources, "PopupSurfaceShadowEffect", CreateShadow(WpfColor.FromRgb(46, 67, 105), 0.18, 32, 8));
+        SetEffect(resources, "PopupActionBarShadowEffect", CreateShadow(WpfColor.FromRgb(46, 67, 105), 0.12, 18, 5));
+    }
+
+    private static void ApplyExplanationResources(ResourceDictionary resources, string popupVisualStyle)
+    {
+        if (PopupVisualStyleCatalog.IsBubbleV2(popupVisualStyle))
+        {
+            SetBrush(resources, "ExplanationSurfaceBrush", "#F7F8FC");
+            SetBrush(resources, "ExplanationHeaderBrush", "#EBEDF6");
+            return;
+        }
+
+        SetBrush(resources, "ExplanationSurfaceBrush", "#EEF0F3");
+        SetBrush(resources, "ExplanationHeaderBrush", "#E4E7EC");
+    }
+
+    private static LinearGradientBrush CreateBubbleSurfaceBrush()
+    {
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new WpfPoint(0, 0),
+            EndPoint = new WpfPoint(1, 1),
+        };
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromRgb(255, 255, 255), 0));
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromRgb(238, 248, 255), 0.54));
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromRgb(246, 241, 255), 1));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static LinearGradientBrush CreateBubbleHighlightBrush()
+    {
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new WpfPoint(0.1, 0),
+            EndPoint = new WpfPoint(0.9, 1),
+        };
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromArgb(118, 255, 255, 255), 0));
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromArgb(42, 255, 255, 255), 0.34));
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromArgb(0, 255, 255, 255), 0.72));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static DrawingBrush CreateBubbleV2SurfaceBrush()
+    {
+        const double canvasSize = 100;
+        var drawing = new DrawingGroup();
+        drawing.Children.Add(new GeometryDrawing(
+            CreateBubbleV2BaseBrush(),
+            null,
+            new RectangleGeometry(new Rect(0, 0, canvasSize, canvasSize))));
+        drawing.Children.Add(new GeometryDrawing(
+            CreateSoftAuraBrush(WpfColor.FromArgb(118, 255, 164, 223)),
+            null,
+            new EllipseGeometry(new WpfPoint(84, 20), 40, 34)));
+        drawing.Children.Add(new GeometryDrawing(
+            CreateSoftAuraBrush(WpfColor.FromArgb(96, 115, 220, 255)),
+            null,
+            new EllipseGeometry(new WpfPoint(15, 80), 43, 39)));
+        drawing.Children.Add(new GeometryDrawing(
+            CreateSoftAuraBrush(WpfColor.FromArgb(84, 184, 143, 255)),
+            null,
+            new EllipseGeometry(new WpfPoint(86, 83), 42, 38)));
+        drawing.Children.Add(new GeometryDrawing(
+            CreateSoftAuraBrush(WpfColor.FromArgb(168, 255, 255, 255)),
+            null,
+            new EllipseGeometry(new WpfPoint(21, 13), 34, 24)));
+        drawing.Freeze();
+
+        var brush = new DrawingBrush(drawing)
+        {
+            Viewbox = new Rect(0, 0, canvasSize, canvasSize),
+            ViewboxUnits = BrushMappingMode.Absolute,
+            Viewport = new Rect(0, 0, 1, 1),
+            ViewportUnits = BrushMappingMode.RelativeToBoundingBox,
+            Stretch = Stretch.Fill,
+            TileMode = TileMode.None,
+        };
+        brush.Freeze();
+        return brush;
+    }
+
+    private static LinearGradientBrush CreateBubbleV2BaseBrush()
+    {
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new WpfPoint(0, 0),
+            EndPoint = new WpfPoint(1, 1),
+        };
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromRgb(255, 255, 255), 0));
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromRgb(241, 248, 255), 0.44));
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromRgb(246, 241, 255), 1));
+        return brush;
+    }
+
+    private static RadialGradientBrush CreateSoftAuraBrush(WpfColor color)
+    {
+        var brush = new RadialGradientBrush
+        {
+            Center = new WpfPoint(0.5, 0.5),
+            GradientOrigin = new WpfPoint(0.5, 0.5),
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+        };
+        brush.GradientStops.Add(new GradientStop(color, 0));
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromArgb(0, color.R, color.G, color.B), 0.82));
+        return brush;
+    }
+
+    private static DrawingBrush CreateBubbleV2HighlightBrush()
+    {
+        const double canvasSize = 100;
+        var drawing = new DrawingGroup();
+        drawing.Children.Add(new GeometryDrawing(
+            CreateSoftAuraBrush(WpfColor.FromArgb(124, 255, 255, 255)),
+            null,
+            new EllipseGeometry(new WpfPoint(30, 8), 52, 28)));
+        drawing.Freeze();
+
+        var brush = new DrawingBrush(drawing)
+        {
+            Viewbox = new Rect(0, 0, canvasSize, canvasSize),
+            ViewboxUnits = BrushMappingMode.Absolute,
+            Viewport = new Rect(0, 0, 1, 1),
+            ViewportUnits = BrushMappingMode.RelativeToBoundingBox,
+            Stretch = Stretch.Fill,
+            TileMode = TileMode.None,
+        };
+        brush.Freeze();
+        return brush;
+    }
+
+    private static LinearGradientBrush CreateBubbleV2ButtonBrush()
+    {
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new WpfPoint(0, 0),
+            EndPoint = new WpfPoint(0, 1),
+        };
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromRgb(255, 255, 255), 0));
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromRgb(247, 249, 255), 1));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static DropShadowEffect CreateShadow(System.Windows.Media.Color color, double opacity, double blurRadius, double shadowDepth)
+    {
+        var effect = new DropShadowEffect
+        {
+            Color = color,
+            Opacity = opacity,
+            BlurRadius = blurRadius,
+            ShadowDepth = shadowDepth,
+            Direction = 270,
+        };
+        effect.Freeze();
+        return effect;
+    }
+
+    private static void SetCornerRadius(ResourceDictionary resources, string key, CornerRadius cornerRadius)
+    {
+        resources[key] = cornerRadius;
+    }
+
+    private static void SetEffect(ResourceDictionary resources, string key, Effect effect)
+    {
+        resources[key] = effect;
     }
 }

@@ -1,4 +1,6 @@
 using InstantTranslate.Models;
+using InstantTranslate.Settings;
+using InstantTranslate.Translation;
 
 namespace InstantTranslate.Windows;
 
@@ -29,6 +31,10 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
     public event Action<long, bool>? PinStateChanged;
 
     public event Func<PopupTranslationCorrection, bool>? TranslationCorrectionRequested;
+
+    public event Action<PopupExplanationRequest>? ExplanationRequested;
+
+    public event Action<long>? ExplanationDismissed;
 
     public string CreateStatusReport(bool useChinese)
     {
@@ -98,6 +104,38 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
         }
     }
 
+    public void ShowExplanationLoading(long requestId)
+    {
+        if (_windows.TryGetValue(requestId, out var window))
+        {
+            window.ShowExplanationLoading();
+        }
+    }
+
+    public void ShowExplanation(long requestId, string explanation)
+    {
+        if (_windows.TryGetValue(requestId, out var window))
+        {
+            window.ShowExplanation(explanation);
+        }
+    }
+
+    public void FailExplanation(long requestId, string message)
+    {
+        if (_windows.TryGetValue(requestId, out var window))
+        {
+            window.ShowExplanationFailure(message);
+        }
+    }
+
+    public void HideExplanation(long requestId)
+    {
+        if (_windows.TryGetValue(requestId, out var window))
+        {
+            window.HideExplanation(notifyDismissed: false);
+        }
+    }
+
     public bool IsPointOverPopup(ScreenPoint point)
     {
         return _windows.Values.Any(window => window.ContainsScreenPoint(point));
@@ -141,7 +179,8 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
             window.ApplyAppearance(
                 appearance.EnglishFontFamily,
                 appearance.ChineseFontFamily,
-                appearance.UiLanguage);
+                appearance.UiLanguage,
+                appearance.PopupVisualStyle);
         }
     }
 
@@ -175,10 +214,13 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
             appearance.FontSize,
             appearance.EnglishFontFamily,
             appearance.ChineseFontFamily,
-            appearance.UiLanguage);
+            appearance.UiLanguage,
+            appearance.PopupVisualStyle);
         window.PinStateChanged += OnPinStateChanged;
         window.RetranslateRequested += OnRetranslateRequested;
         window.CorrectionSaveRequested += OnCorrectionSaveRequested;
+        window.ExplanationRequested += OnExplanationRequested;
+        window.ExplanationDismissed += OnExplanationDismissed;
         window.Closed += OnWindowClosed;
         _windows.Add(requestId, window);
         return window;
@@ -239,6 +281,33 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
             window.CurrentTargetLanguage)) == true;
     }
 
+    private void OnExplanationRequested(
+        PopupWindow window,
+        string subjectText,
+        ExplanationScope scope)
+    {
+        if (string.IsNullOrWhiteSpace(subjectText)
+            || string.IsNullOrWhiteSpace(window.CurrentTranslationSourceText)
+            || string.IsNullOrWhiteSpace(window.CurrentTranslationText))
+        {
+            return;
+        }
+
+        ExplanationRequested?.Invoke(new PopupExplanationRequest(
+            window.RequestId,
+            subjectText,
+            window.CurrentTranslationSourceText,
+            window.CurrentTranslationText,
+            window.CurrentSourceLanguage,
+            window.CurrentTargetLanguage,
+            scope));
+    }
+
+    private void OnExplanationDismissed(PopupWindow window)
+    {
+        ExplanationDismissed?.Invoke(window.RequestId);
+    }
+
     private void OnWindowClosed(object? sender, EventArgs e)
     {
         if (sender is not PopupWindow window)
@@ -249,6 +318,8 @@ internal sealed class PopupManager : IPopupPresenter, IDisposable
         window.PinStateChanged -= OnPinStateChanged;
         window.RetranslateRequested -= OnRetranslateRequested;
         window.CorrectionSaveRequested -= OnCorrectionSaveRequested;
+        window.ExplanationRequested -= OnExplanationRequested;
+        window.ExplanationDismissed -= OnExplanationDismissed;
         window.Closed -= OnWindowClosed;
         _windows.Remove(window.RequestId);
         if (_transientRequestId == window.RequestId)
@@ -268,11 +339,13 @@ internal sealed record PopupAppearanceSettings(
     double FontSize,
     string EnglishFontFamily,
     string ChineseFontFamily,
-    string UiLanguage)
+    string UiLanguage,
+    string PopupVisualStyle)
 {
     internal static PopupAppearanceSettings Default { get; } = new(
         16.5,
         "Times New Roman",
         "SimHei",
-        "en");
+        "en",
+        PopupVisualStyleCatalog.DefaultStyleId);
 }

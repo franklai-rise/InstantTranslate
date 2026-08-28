@@ -5,4 +5,5 @@ obj/
 *.suo
 TestResults/
 artifacts/
+.work/
 *.log

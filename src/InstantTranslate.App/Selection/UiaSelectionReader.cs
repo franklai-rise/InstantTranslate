@@ -264,9 +264,11 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
             try
             {
                 var candidate = AutomationElement.FocusedElement;
-                if (ShouldIncludeFocusedElement(hitProcessId, TryGetProcessId(candidate))
-                    && expectedRootOwner != IntPtr.Zero
-                    && TryGetRootOwnerHandle(candidate) == expectedRootOwner)
+                if (ShouldIncludeFocusedElementInTargetWindow(
+                        hitProcessId,
+                        TryGetProcessId(candidate),
+                        expectedRootOwner,
+                        TryGetRootOwnerHandle(candidate)))
                 {
                     focusedElement = candidate;
                 }
@@ -295,6 +297,26 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
     internal static bool ShouldIncludeFocusedElement(int? hitProcessId, int? focusedProcessId)
     {
         return hitProcessId is > 0 && hitProcessId == focusedProcessId;
+    }
+
+    internal static bool ShouldIncludeFocusedElementInTargetWindow(
+        int? hitProcessId,
+        int? focusedProcessId,
+        IntPtr expectedRootOwner,
+        IntPtr focusedRootOwner)
+    {
+        if (!ShouldIncludeFocusedElement(hitProcessId, focusedProcessId))
+        {
+            return false;
+        }
+
+        // Chromium/Electron document hosts commonly omit NativeWindowHandle
+        // on the focused accessibility node. A same-process focus is still
+        // the active document the user just selected in; reject only when a
+        // concrete root owner proves it belongs to another top-level window.
+        return expectedRootOwner == IntPtr.Zero
+               || focusedRootOwner == IntPtr.Zero
+               || focusedRootOwner == expectedRootOwner;
     }
 
     private static IReadOnlyList<AutomationElement> GetSafeCandidatePath(AutomationElement? root)

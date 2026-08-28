@@ -155,6 +155,7 @@ internal sealed class SettingsStore
             CustomAccentColor = string.IsNullOrWhiteSpace(value.CustomAccentColor)
                 ? defaults.CustomAccentColor
                 : value.CustomAccentColor.Trim(),
+            PopupVisualStyle = PopupVisualStyleCatalog.Normalize(value.PopupVisualStyle),
             SelectionDelayMilliseconds = Math.Clamp(value.SelectionDelayMilliseconds, 0, 2000),
             MaximumSelectionCharacters = Math.Clamp(value.MaximumSelectionCharacters, 1, 20_000),
             DefaultTranslationFontSize = double.IsFinite(value.DefaultTranslationFontSize)

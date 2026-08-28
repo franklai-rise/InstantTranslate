@@ -39,7 +39,7 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="7">
+                                CornerRadius="{DynamicResource PopupButtonCornerRadius}">
                             <ContentPresenter Margin="{TemplateBinding Padding}"
                                               HorizontalAlignment="Center"
                                               VerticalAlignment="Center" />
@@ -228,7 +228,8 @@
                 Background="{DynamicResource PopupButtonBrush}"
                 BorderBrush="Transparent"
                 BorderThickness="0"
-                CornerRadius="11"
+                CornerRadius="{DynamicResource PopupActionBarCornerRadius}"
+                Effect="{DynamicResource PopupActionBarShadowEffect}"
                 HorizontalAlignment="Right">
             <StackPanel x:Name="ActionPanel"
                         Visibility="Collapsed"
@@ -287,10 +288,22 @@
                         Content="To Chinese"
                         ToolTip="Switch translation language"
                         Click="DirectionButton_Click" />
+                <Button x:Name="ExplainButton"
+                        Width="Auto"
+                        MinWidth="62"
+                        Margin="2,0,2,0"
+                        Padding="9,4"
+                        Style="{StaticResource ActionButtonStyle}"
+                        FontSize="12"
+                        FontWeight="SemiBold"
+                        Content="Explain"
+                        ToolTip="Explain source text"
+                        IsEnabled="False"
+                        Click="ExplainButton_Click" />
                 <Border Margin="3,0,2,0"
                         Padding="2"
                         Background="{DynamicResource PopupBackgroundBrush}"
-                        CornerRadius="8">
+                        CornerRadius="{DynamicResource PopupButtonCornerRadius}">
                     <StackPanel Orientation="Horizontal">
                         <Viewbox Width="16" Height="16" Margin="5,0,3,0">
                             <Canvas Width="24" Height="24">
@@ -368,18 +381,49 @@
             </StackPanel>
         </Border>
 
-        <Border x:Name="PopupSurface"
-                Grid.Row="1"
+        <Grid Grid.Row="1">
+            <Canvas x:Name="BubbleTailLayer"
+                    Panel.ZIndex="0"
+                    IsHitTestVisible="False">
+                <Path x:Name="BubbleLeftTail"
+                      Canvas.Left="2"
+                      Canvas.Top="31"
+                      Data="M0,0 L18,8 L0,16 Z"
+                      Fill="{DynamicResource PopupTailBrush}"
+                      Stroke="{DynamicResource PopupTailStrokeBrush}"
+                      StrokeThickness="1"
+                      StrokeLineJoin="Round"
+                      Visibility="Collapsed" />
+                <Path x:Name="BubbleRightTail"
+                      Canvas.Right="2"
+                      Canvas.Top="31"
+                      Data="M18,0 L0,8 L18,16 Z"
+                      Fill="{DynamicResource PopupTailBrush}"
+                      Stroke="{DynamicResource PopupTailStrokeBrush}"
+                      StrokeThickness="1"
+                      StrokeLineJoin="Round"
+                      Visibility="Collapsed" />
+            </Canvas>
+
+            <Border x:Name="PopupSurface"
+                Panel.ZIndex="1"
                 MaxWidth="820"
                 MaxHeight="600"
                 ClipToBounds="True"
                 Padding="16,14"
-                CornerRadius="12"
+                CornerRadius="{DynamicResource PopupSurfaceCornerRadius}"
                 Background="{DynamicResource PopupBackgroundBrush}"
                 BorderBrush="Transparent"
                 BorderThickness="0"
+                Effect="{DynamicResource PopupSurfaceShadowEffect}"
+                SizeChanged="PopupSurface_SizeChanged"
                 MouseLeftButtonDown="PopupSurface_MouseLeftButtonDown">
-            <Grid>
+            <Grid x:Name="PopupContentGrid">
+                <Border x:Name="BubbleHighlight"
+                        IsHitTestVisible="False"
+                        Background="{DynamicResource PopupHighlightBrush}"
+                        CornerRadius="{DynamicResource PopupSurfaceCornerRadius}"
+                        Visibility="Collapsed" />
                 <StackPanel x:Name="LoadingPanel"
                             MinWidth="150"
                             Margin="0"
@@ -420,7 +464,8 @@
                              VerticalAlignment="Stretch"
                              VerticalContentAlignment="Top"
                              ScrollViewer.PanningMode="VerticalOnly"
-                             PreviewMouseLeftButtonDown="TranslationRichTextBox_PreviewMouseLeftButtonDown">
+                             PreviewMouseLeftButtonDown="TranslationRichTextBox_PreviewMouseLeftButtonDown"
+                             SelectionChanged="TranslationRichTextBox_SelectionChanged">
                     <RichTextBox.ContextMenu>
                         <ContextMenu FontFamily="{DynamicResource InterfaceFont}"
                                      FontSize="12.5">
@@ -436,7 +481,123 @@
                         </ContextMenu>
                     </RichTextBox.ContextMenu>
                 </RichTextBox>
+
+                <Canvas x:Name="SelectionActionLayer"
+                        Panel.ZIndex="10"
+                        IsHitTestVisible="True">
+                    <Button x:Name="SelectionExplainButton"
+                            Visibility="Collapsed"
+                            Style="{StaticResource TextActionButtonStyle}"
+                            Padding="9,3"
+                            Focusable="False"
+                            Background="{DynamicResource PopupButtonBrush}"
+                            Content="Explain"
+                            ToolTip="Explain selected translation"
+                            Click="SelectionExplainButton_Click" />
+                </Canvas>
+
+                <Grid x:Name="ExplanationOverlay"
+                      Panel.ZIndex="20"
+                      Visibility="Collapsed"
+                      Background="{DynamicResource ExplanationSurfaceBrush}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Border Padding="10,8"
+                            Background="{DynamicResource ExplanationHeaderBrush}"
+                            BorderThickness="0">
+                        <Grid>
+                            <TextBlock x:Name="ExplanationTitleText"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource PopupTextBrush}"
+                                       FontFamily="{DynamicResource InterfaceFont}"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Text="AI Explain" />
+                            <StackPanel HorizontalAlignment="Right"
+                                        Orientation="Horizontal">
+                                <Button x:Name="ExplanationCopyButton"
+                                        Style="{StaticResource TextActionButtonStyle}"
+                                        Margin="0"
+                                        Content="Copy"
+                                        ToolTip="Copy explanation"
+                                        IsEnabled="False"
+                                        Click="ExplanationCopyButton_Click" />
+                                <Button x:Name="ExplanationRetryButton"
+                                        Style="{StaticResource TextActionButtonStyle}"
+                                        Margin="4,0,0,0"
+                                        Content="Retry"
+                                        ToolTip="Retry explanation"
+                                        Visibility="Collapsed"
+                                        Click="ExplanationRetryButton_Click" />
+                                <Button x:Name="ExplanationBackButton"
+                                        Margin="4,0,0,0"
+                                        Style="{StaticResource TextActionButtonStyle}"
+                                        Content="Back"
+                                        ToolTip="Back to translation"
+                                        Click="ExplanationBackButton_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="1"
+                          Margin="12,10">
+                        <TextBlock x:Name="ExplanationStatusText"
+                                   MaxWidth="520"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   Foreground="{DynamicResource PopupMutedBrush}"
+                                   FontFamily="{DynamicResource InterfaceFont}"
+                                   FontSize="13"
+                                   TextWrapping="Wrap"
+                                   Visibility="Collapsed"
+                                   Text="Analyzing…" />
+                        <RichTextBox x:Name="ExplanationRichTextBox"
+                                     Margin="0"
+                                     Padding="0"
+                                     Visibility="Collapsed"
+                                     Background="Transparent"
+                                     Foreground="{DynamicResource PopupTextBrush}"
+                                     BorderThickness="0"
+                                     FontFamily="SimHei"
+                                     FontSize="16.5"
+                                     IsReadOnly="True"
+                                     IsUndoEnabled="False"
+                                     IsDocumentEnabled="False"
+                                     IsInactiveSelectionHighlightEnabled="True"
+                                     Focusable="True"
+                                     Cursor="IBeam"
+                                     SelectionBrush="{DynamicResource AccentLightBrush}"
+                                     SelectionTextBrush="{DynamicResource AccentTextBrush}"
+                                     SelectionOpacity="0.42"
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Disabled"
+                                     HorizontalAlignment="Stretch"
+                                     VerticalAlignment="Stretch"
+                                     VerticalContentAlignment="Top"
+                                     ScrollViewer.PanningMode="VerticalOnly">
+                            <RichTextBox.ContextMenu>
+                                <ContextMenu FontFamily="{DynamicResource InterfaceFont}"
+                                             FontSize="12.5">
+                                    <MenuItem x:Name="CopyExplanationSelectionMenuItem"
+                                              Header="Copy"
+                                              Command="{x:Static ApplicationCommands.Copy}"
+                                              CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <Separator />
+                                    <MenuItem x:Name="SelectAllExplanationMenuItem"
+                                              Header="Select all"
+                                              Command="{x:Static ApplicationCommands.SelectAll}"
+                                              CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                </ContextMenu>
+                            </RichTextBox.ContextMenu>
+                        </RichTextBox>
+                    </Grid>
+                </Grid>
             </Grid>
-        </Border>
+            </Border>
+        </Grid>
     </Grid>
 </Window>

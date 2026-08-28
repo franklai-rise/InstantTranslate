@@ -17,6 +17,9 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     private static readonly TimeSpan TranslationTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan FirstContentTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ExplanationTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan ExplanationFirstContentTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ExplanationStreamIdleTimeout = TimeSpan.FromSeconds(15);
     private const int PromptVersion = 3;
 
     private readonly GlobalMouseHook _mouseHook;
@@ -31,7 +34,9 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     private readonly TranslationMemoryCache _translationCache = new();
     private readonly TranslationInFlightRegistry _inFlightTranslations = new();
     private readonly SemaphoreSlim _translationConcurrency = new(3, 3);
+    private readonly SemaphoreSlim _explanationConcurrency = new(1, 1);
     private readonly object _retranslationSync = new();
+    private readonly ExplanationRequestGate _explanationGate = new();
     private readonly Dictionary<long, CancellationTokenSource> _retranslations = new();
     private readonly Dictionary<long, CancellationTokenSource> _detachedSelections = new();
     private readonly HashSet<long> _runningSelections = new();
@@ -62,6 +67,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         _popupPresenter.PopupClosed += OnPopupClosed;
         _popupPresenter.PinStateChanged += OnPopupPinStateChanged;
         _popupPresenter.TranslationCorrectionRequested += OnTranslationCorrectionRequested;
+        _popupPresenter.ExplanationRequested += OnExplanationRequested;
+        _popupPresenter.ExplanationDismissed += OnExplanationDismissed;
     }
 
     public event Action<string>? TranslationFailed;
@@ -295,6 +302,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             return;
         }
 
+        CancelExplanation(request.RequestId);
         CancelSelectionRequest(request.RequestId);
 
         var cancellation = new CancellationTokenSource();
@@ -387,6 +395,207 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
 
             cancellation.Dispose();
         }
+    }
+
+    private void OnExplanationRequested(PopupExplanationRequest request)
+    {
+        if (_disposed
+            || string.IsNullOrWhiteSpace(request.SubjectText)
+            || string.IsNullOrWhiteSpace(request.SourceText)
+            || string.IsNullOrWhiteSpace(request.TranslationText))
+        {
+            return;
+        }
+
+        ExplanationRequestLease operation;
+        try
+        {
+            operation = _explanationGate.Begin(request.RequestId);
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        _ = ProcessExplanationAsync(request, _getSettings(), operation);
+    }
+
+    private void OnExplanationDismissed(long requestId)
+    {
+        CancelExplanation(requestId);
+    }
+
+    private async Task ProcessExplanationAsync(
+        PopupExplanationRequest request,
+        AppSettings settings,
+        ExplanationRequestLease operation)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(operation.Cancellation.Token);
+        timeout.CancelAfter(ExplanationTimeout);
+        var enteredConcurrencySlot = false;
+        var explanation = new StringBuilder();
+        var updateThrottle = new StreamingUpdateThrottle();
+
+        try
+        {
+            await _dispatcher.InvokeAsync(
+                () =>
+                {
+                    if (IsCurrentExplanation(request.RequestId, operation))
+                    {
+                        _popupPresenter.ShowExplanationLoading(request.RequestId);
+                    }
+                },
+                DispatcherPriority.Send,
+                timeout.Token);
+
+            await _explanationConcurrency.WaitAsync(timeout.Token).ConfigureAwait(false);
+            enteredConcurrencySlot = true;
+            if (!IsCurrentExplanation(request.RequestId, operation))
+            {
+                return;
+            }
+
+            var provider = _translationProviderFactory.CreateExplanationProvider(settings);
+            var providerRequest = new ExplanationRequest(
+                request.SubjectText,
+                request.SourceText,
+                request.TranslationText,
+                request.SourceLanguage,
+                request.TargetLanguage,
+                request.Scope);
+            await using var enumerator = provider
+                .ExplainAsync(providerRequest, timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            var receivedContent = false;
+            while (await MoveNextWithExplanationStageTimeoutAsync(
+                       enumerator,
+                       receivedContent,
+                       timeout).ConfigureAwait(false))
+            {
+                if (!IsCurrentExplanation(request.RequestId, operation))
+                {
+                    return;
+                }
+
+                var chunk = enumerator.Current;
+                explanation.Append(chunk.TextDelta);
+                if (!string.IsNullOrEmpty(chunk.TextDelta))
+                {
+                    receivedContent = true;
+                }
+
+                if (!updateThrottle.ShouldPublish(explanation.Length, chunk.IsFinal))
+                {
+                    continue;
+                }
+
+                await ShowExplanationIfCurrentAsync(
+                    request.RequestId,
+                    operation,
+                    explanation.ToString(),
+                    timeout.Token).ConfigureAwait(false);
+            }
+
+            if (updateThrottle.HasPendingUpdate(explanation.Length))
+            {
+                await ShowExplanationIfCurrentAsync(
+                    request.RequestId,
+                    operation,
+                    explanation.ToString(),
+                    timeout.Token).ConfigureAwait(false);
+            }
+
+            if (explanation.Length == 0)
+            {
+                throw new TranslationProviderException(
+                    "DeepSeek 未返回可用的解释内容。",
+                    TranslationFailureKind.Server);
+            }
+        }
+        catch (OperationCanceledException) when (operation.Cancellation.IsCancellationRequested)
+        {
+            // The user left the explanation, the popup closed, or a newer
+            // explanation replaced this one. Never surface stale failures.
+        }
+        catch (TranslationProviderException exception)
+        {
+            Debug.WriteLine($"InstantTranslate explanation provider failed: {exception}");
+            await FailExplanationIfCurrentAsync(
+                request.RequestId,
+                operation,
+                UiLanguageCatalog.LocalizeProviderError(settings.UiLanguage, exception.Message)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception)
+        {
+            Debug.WriteLine($"InstantTranslate explanation ended unexpectedly: {exception}");
+            var message = timeout.IsCancellationRequested
+                ? Localize(settings, "AI explanation timed out. Try again.", "AI 解释超时，请重试。")
+                : Localize(settings, "AI explanation ended unexpectedly. Try again.", "AI 解释意外中断，请重试。");
+            await FailExplanationIfCurrentAsync(request.RequestId, operation, message).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"InstantTranslate explanation pipeline failed: {exception}");
+            await FailExplanationIfCurrentAsync(
+                request.RequestId,
+                operation,
+                Localize(settings, "AI explanation failed. Check the network and try again.", "AI 解释失败，请检查网络后重试。")).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (enteredConcurrencySlot)
+            {
+                _explanationConcurrency.Release();
+            }
+
+            _explanationGate.Complete(operation);
+            operation.Cancellation.Dispose();
+        }
+    }
+
+    private async Task ShowExplanationIfCurrentAsync(
+        long requestId,
+        ExplanationRequestLease operation,
+        string explanation,
+        CancellationToken cancellationToken)
+    {
+        if (!IsCurrentExplanation(requestId, operation))
+        {
+            return;
+        }
+
+        await _dispatcher.InvokeAsync(
+            () =>
+            {
+                if (IsCurrentExplanation(requestId, operation))
+                {
+                    _popupPresenter.ShowExplanation(requestId, explanation);
+                }
+            },
+            DispatcherPriority.Normal,
+            cancellationToken);
+    }
+
+    private async Task FailExplanationIfCurrentAsync(
+        long requestId,
+        ExplanationRequestLease operation,
+        string message)
+    {
+        if (!IsCurrentExplanation(requestId, operation))
+        {
+            return;
+        }
+
+        await _dispatcher.InvokeAsync(
+            () =>
+            {
+                if (IsCurrentExplanation(requestId, operation))
+                {
+                    _popupPresenter.FailExplanation(requestId, message);
+                }
+            },
+            DispatcherPriority.Send);
     }
 
     private async Task<TranslationOutcome> TranslateResolvedTextAsync(
@@ -769,6 +978,33 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
     }
 
+    private static async Task<bool> MoveNextWithExplanationStageTimeoutAsync(
+        IAsyncEnumerator<TranslationChunk> enumerator,
+        bool receivedContent,
+        CancellationTokenSource requestTimeout)
+    {
+        var stageTimeout = receivedContent
+            ? ExplanationStreamIdleTimeout
+            : ExplanationFirstContentTimeout;
+        try
+        {
+            return await enumerator.MoveNextAsync()
+                .AsTask()
+                .WaitAsync(stageTimeout, requestTimeout.Token)
+                .ConfigureAwait(false);
+        }
+        catch (TimeoutException exception)
+        {
+            requestTimeout.Cancel();
+            throw new TranslationProviderException(
+                receivedContent
+                    ? "DeepSeek 解释流停顿超过 15 秒，已取消。"
+                    : "DeepSeek 在 15 秒内未返回首段解释，请检查网络后重试。",
+                exception,
+                TranslationFailureKind.Timeout);
+        }
+    }
+
     private static TranslationCacheKey CreateCacheKey(
         string sourceText,
         string? context,
@@ -849,6 +1085,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
 
     private void OnPopupClosed(long requestId)
     {
+        CancelExplanation(requestId);
         CancelSelectionRequest(requestId);
         lock (_retranslationSync)
         {
@@ -969,6 +1206,18 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
     }
 
+    private bool IsCurrentExplanation(long requestId, ExplanationRequestLease operation)
+    {
+        return !_disposed
+               && operation.RequestId == requestId
+               && _explanationGate.IsCurrent(operation);
+    }
+
+    private void CancelExplanation(long requestId)
+    {
+        _explanationGate.Cancel(requestId);
+    }
+
     private async Task FailPopupIfCurrentAsync(long version, string? message = null)
     {
         if (!IsSelectionRequestActive(version))
@@ -1001,6 +1250,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         _popupPresenter.PopupClosed -= OnPopupClosed;
         _popupPresenter.PinStateChanged -= OnPopupPinStateChanged;
         _popupPresenter.TranslationCorrectionRequested -= OnTranslationCorrectionRequested;
+        _popupPresenter.ExplanationRequested -= OnExplanationRequested;
+        _popupPresenter.ExplanationDismissed -= OnExplanationDismissed;
         _requestGate.Dispose();
         _translationCache.Clear();
 
@@ -1023,5 +1274,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                 }
             }
         }
+
+        _explanationGate.Dispose();
     }
 }

@@ -108,7 +108,8 @@ public partial class App : System.Windows.Application
                     16.5,
                     TranslationFontCatalog.DefaultEnglishFontFamily,
                     TranslationFontCatalog.DefaultChineseFontFamily,
-                    UiLanguageCatalog.EnglishLanguageId));
+                    UiLanguageCatalog.EnglishLanguageId,
+                    PopupVisualStyleCatalog.DefaultStyleId));
             _ = RunPopupSnapshotTestAsync();
             return;
         }
@@ -138,7 +139,8 @@ public partial class App : System.Windows.Application
                     _uiaSelectionReader,
                     new NativeSelectionReader(),
                     new ClipboardSelectionReader(Dispatcher, WindowProcessResolver.IsClipboardFallbackAllowedAt),
-                    () => _settings.UseClipboardFallback),
+                    () => _settings.UseClipboardFallback,
+                    WindowProcessResolver.RequiresSelectionStabilizationAt),
                 _translationProviderFactory,
                 _popupManager,
                 Dispatcher,
@@ -540,6 +542,47 @@ public partial class App : System.Windows.Application
                 ?? throw new InvalidOperationException("无法创建浮窗预览。");
             VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup"));
 
+            ThemeManager.Apply(AppSettings.Default with
+            {
+                PopupVisualStyle = PopupVisualStyleCatalog.BubbleStyleId,
+            });
+            window.ApplyAppearance(
+                TranslationFontCatalog.DefaultEnglishFontFamily,
+                TranslationFontCatalog.DefaultChineseFontFamily,
+                UiLanguageCatalog.EnglishLanguageId,
+                PopupVisualStyleCatalog.BubbleStyleId);
+            await Task.Delay(120);
+            if (!window.IsBubbleVisualStyleForVisualTest())
+            {
+                throw new InvalidOperationException("气泡浮窗样式未应用。");
+            }
+
+            VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-bubble"));
+
+            ThemeManager.Apply(AppSettings.Default with
+            {
+                PopupVisualStyle = PopupVisualStyleCatalog.BubbleV2StyleId,
+            });
+            window.ApplyAppearance(
+                TranslationFontCatalog.DefaultEnglishFontFamily,
+                TranslationFontCatalog.DefaultChineseFontFamily,
+                UiLanguageCatalog.EnglishLanguageId,
+                PopupVisualStyleCatalog.BubbleV2StyleId);
+            await Task.Delay(120);
+            if (!window.IsBubbleV2VisualStyleForVisualTest())
+            {
+                throw new InvalidOperationException("气泡 2.0 浮窗样式未应用。");
+            }
+
+            VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-bubble-v2"));
+
+            ThemeManager.Apply(AppSettings.Default);
+            window.ApplyAppearance(
+                TranslationFontCatalog.DefaultEnglishFontFamily,
+                TranslationFontCatalog.DefaultChineseFontFamily,
+                UiLanguageCatalog.EnglishLanguageId,
+                PopupVisualStyleCatalog.MinimalStyleId);
+
             window.ApplyUiLanguage(UiLanguageCatalog.SimplifiedChineseLanguageId);
             await Task.Delay(100);
             VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-zh"));
@@ -552,7 +595,24 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException("浮窗正文未进入正常文字选择状态。");
             }
 
+            if (!window.HasSelectionExplainButtonForVisualTest())
+            {
+                throw new InvalidOperationException("译文选区未显示解释按钮。");
+            }
+
             VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-selection"));
+
+            window.ShowExplanationLoading();
+            window.ShowExplanation(
+                "释义：这句话强调简约并非删减能力，而是降低操作阻力。\n\n要点：capability 指功能能力；direct and effortless 表示直接、无需额外心智负担。\n\n语境：适合用于产品设计、交互体验或工作流程的说明。");
+            await Task.Delay(420);
+            if (!window.IsExplanationVisibleForVisualTest())
+            {
+                throw new InvalidOperationException("AI 解释覆盖层未显示。");
+            }
+
+            VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-explanation"));
+            window.HideExplanation(notifyDismissed: false);
 
             const string longTranslation =
                 "A restrained interface should remain comfortable when the content grows. "
@@ -596,6 +656,7 @@ public partial class App : System.Windows.Application
                 UiLanguage = UiLanguageCatalog.EnglishLanguageId,
                 ProviderId = "mock",
                 DeepSeekApiKey = string.Empty,
+                PopupVisualStyle = PopupVisualStyleCatalog.BubbleV2StyleId,
             });
             window.Show();
             await Task.Delay(350);
@@ -618,6 +679,7 @@ public partial class App : System.Windows.Application
                 UiLanguage = UiLanguageCatalog.SimplifiedChineseLanguageId,
                 ProviderId = "mock",
                 DeepSeekApiKey = string.Empty,
+                PopupVisualStyle = PopupVisualStyleCatalog.BubbleV2StyleId,
             });
             window.Show();
             await Task.Delay(250);
@@ -810,7 +872,8 @@ public partial class App : System.Windows.Application
                 _settings.DefaultTranslationFontSize,
                 _settings.EnglishTranslationFontFamily,
                 _settings.ChineseTranslationFontFamily,
-                _settings.UiLanguage));
+                _settings.UiLanguage,
+                _settings.PopupVisualStyle));
     }
 
     protected override void OnExit(ExitEventArgs e)

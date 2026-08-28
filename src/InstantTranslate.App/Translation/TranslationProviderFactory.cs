@@ -53,6 +53,15 @@ internal sealed class TranslationProviderFactory : ITranslationProviderFactory, 
         };
     }
 
+    public IStreamingExplanationProvider CreateExplanationProvider(AppSettings settings)
+    {
+        var provider = Create(settings);
+        return provider as IStreamingExplanationProvider
+            ?? throw new TranslationProviderException(
+                $"当前翻译 Provider 不支持 AI 解释：{settings.ProviderId}",
+                TranslationFailureKind.Configuration);
+    }
+
     private IStreamingTranslationProvider CreateDeepSeekProvider(AppSettings settings)
     {
         if (!TryValidateEndpoint(settings.DeepSeekEndpoint, out var endpoint))

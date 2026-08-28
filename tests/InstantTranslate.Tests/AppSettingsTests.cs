@@ -25,6 +25,7 @@ public sealed class AppSettingsTests
         Assert.NotNull(settings);
         Assert.Equal(ThemeCatalog.DefaultThemeId, settings.ColorTheme);
         Assert.Equal(ThemeCatalog.DefaultCustomAccent, settings.CustomAccentColor);
+        Assert.Equal(PopupVisualStyleCatalog.DefaultStyleId, settings.PopupVisualStyle);
         Assert.False(settings.StartWithWindows);
         Assert.False(settings.UseClipboardFallback);
         Assert.Equal(16.5, settings.DefaultTranslationFontSize);

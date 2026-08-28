@@ -19,6 +19,18 @@ internal static class WindowProcessResolver
         "wezterm",
     };
 
+    private static readonly HashSet<string> DelayedAccessibilitySelectionProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Chromium and Electron commit selections from their render layer after
+        // mouse-up in some document viewers. Retrying UIA/native reads is safe
+        // and avoids enabling the clipboard compatibility path by default.
+        "msedge",
+        "chrome",
+        "chromium",
+        "msedgewebview2",
+        "zotero",
+    };
+
     public static bool IsCurrentProcessAt(ScreenPoint point)
     {
         var windowHandle = NativeMethods.WindowFromPoint(new NativeMethods.NativePoint
@@ -109,10 +121,48 @@ internal static class WindowProcessResolver
         }
     }
 
+    public static bool RequiresSelectionStabilizationAt(ScreenPoint point)
+    {
+        var windowHandle = NativeMethods.WindowFromPoint(new NativeMethods.NativePoint
+        {
+            X = point.X,
+            Y = point.Y,
+        });
+        if (!IsExternalClipboardTarget(windowHandle))
+        {
+            return false;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(windowHandle, out var processId);
+        try
+        {
+            using var process = Process.GetProcessById((int)processId);
+            return RequiresSelectionStabilization(process.ProcessName);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
     internal static bool IsClipboardFallbackProcessAllowed(string? processName)
     {
         return !string.IsNullOrWhiteSpace(processName)
             && !ClipboardFallbackBlockedProcesses.Contains(processName);
+    }
+
+    internal static bool RequiresSelectionStabilization(string? processName)
+    {
+        return !string.IsNullOrWhiteSpace(processName)
+            && DelayedAccessibilitySelectionProcesses.Contains(processName);
     }
 
     private static bool TryGetSelectionTargetAt(

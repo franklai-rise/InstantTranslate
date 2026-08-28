@@ -1,4 +1,5 @@
 using InstantTranslate.Models;
+using InstantTranslate.Translation;
 
 namespace InstantTranslate.Windows;
 
@@ -16,6 +17,15 @@ internal sealed record PopupTranslationCorrection(
     string SourceLanguage,
     string TargetLanguage);
 
+internal sealed record PopupExplanationRequest(
+    long RequestId,
+    string SubjectText,
+    string SourceText,
+    string TranslationText,
+    string SourceLanguage,
+    string TargetLanguage,
+    ExplanationScope Scope);
+
 internal interface IPopupPresenter
 {
     event Action<PopupRetranslateRequest>? RetranslateRequested;
@@ -25,6 +35,10 @@ internal interface IPopupPresenter
     event Action<long, bool>? PinStateChanged;
 
     event Func<PopupTranslationCorrection, bool>? TranslationCorrectionRequested;
+
+    event Action<PopupExplanationRequest>? ExplanationRequested;
+
+    event Action<long>? ExplanationDismissed;
 
     void ShowLoading(long requestId, ScreenPoint anchorPoint);
 
@@ -39,6 +53,14 @@ internal interface IPopupPresenter
     void FailRequest(long requestId, string? message = null);
 
     void CompleteRequest(long requestId);
+
+    void ShowExplanationLoading(long requestId);
+
+    void ShowExplanation(long requestId, string explanation);
+
+    void FailExplanation(long requestId, string message);
+
+    void HideExplanation(long requestId);
 
     bool IsPointOverPopup(ScreenPoint point);
 

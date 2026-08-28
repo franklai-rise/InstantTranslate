@@ -47,6 +47,12 @@ internal sealed record AppSettings
 
     public string CustomAccentColor { get; init; } = ThemeCatalog.DefaultCustomAccent;
 
+    /// <summary>
+    /// Controls the translation popup's visual treatment without changing
+    /// translation behavior, fonts, or accessibility settings.
+    /// </summary>
+    public string PopupVisualStyle { get; init; } = PopupVisualStyleCatalog.DefaultStyleId;
+
     public double DefaultTranslationFontSize { get; init; } = 16.5;
 
     public string EnglishTranslationFontFamily { get; init; } = TranslationFontCatalog.DefaultEnglishFontFamily;

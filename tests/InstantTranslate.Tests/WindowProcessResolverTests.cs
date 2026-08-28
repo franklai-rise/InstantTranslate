@@ -25,6 +25,24 @@ public sealed class WindowProcessResolverTests
     }
 
     [Theory]
+    [InlineData("msedge")]
+    [InlineData("chrome")]
+    [InlineData("zotero")]
+    public void DelaysReadForBrowserAndPdfReaderProcesses(string processName)
+    {
+        Assert.True(WindowProcessResolver.RequiresSelectionStabilization(processName));
+    }
+
+    [Theory]
+    [InlineData("notepad")]
+    [InlineData("WeChat")]
+    [InlineData(null)]
+    public void DoesNotDelayReadForOrdinaryProcesses(string? processName)
+    {
+        Assert.False(WindowProcessResolver.RequiresSelectionStabilization(processName));
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]

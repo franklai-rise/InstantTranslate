@@ -8,14 +8,31 @@
 
 InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具。在大多数可选择文字的应用中拖选文本，它会读取选区、调用 DeepSeek，并在鼠标附近显示不抢焦点的译文浮窗。
 
+## 效果预览
+
+### Bubble 2.0
+
+![Bubble 2.0 翻译浮窗](docs/images/InstantTranslate-popup-bubble-v2-preview.png)
+
+### AI Explain
+
+![AI Explain 解释界面](docs/images/InstantTranslate-popup-explanation-preview.png)
+
 ## 15 秒开始使用
 
-1. 下载并解压 `InstantTranslate-v0.5.4-win-x64.zip`。
+1. 下载并解压 `InstantTranslate-v0.6.0-win-x64.zip`。
 2. 运行 `InstantTranslate.exe`；首次启动会打开设置。
 3. 填写 DeepSeek API Key，点击“Test connection”（切换中文后为“测试连接”），成功后保存。
 4. 在记事本、浏览器或文档中用鼠标拖选文字。
 
 程序常驻系统托盘。再次双击 EXE 不会重复安装鼠标钩子，而会唤起已有实例的设置页。
+
+## AI Explain
+
+- 译文完成后，功能栏中的 `Explain / 解释` 会用 DeepSeek 对本次原始划词内容作简洁中文讲解，按“释义、要点、语境”组织并流式显示。
+- 在译文正文中选中一段文字，会在选区附近出现独立的 `Explain / 解释` 按钮；该操作只解释所选译文，不会再次触发全局划词翻译。
+- 解释显示在原浮窗正文上的浅雾灰覆盖层内，不新开窗口、不改变窗口大小。可复制、重试或返回原译文；按 `Esc` 也会优先返回。
+- 解释复用当前 DeepSeek Endpoint、Model 和 API Key，但不进入翻译记忆、磁盘设置或翻译缓存。关闭解释层、关闭浮窗、未置顶浮窗点击外部、重新翻译或发起新的解释都会取消未完成请求。
 
 ## v0.5.4 上边缘缩放
 
@@ -56,15 +73,17 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 - 新增本机个人术语库，使用 `原词 => 指定译法` 的简单格式；请求时只发送当前选区实际命中的术语。
 
 - 自动判断方向：纯中文译为英文；中英混合、英文和其他文本优先译为简体中文。
-- DeepSeek OpenAI-compatible SSE 流式翻译；收到首段译文后才显示浮窗，不再先弹出旋转等待动画，后续内容合并刷新。
+- DeepSeek OpenAI-compatible SSE 流式翻译；收到首段译文后才显示浮窗，不再先弹出旋转等待动画，后续文字会随网络内容平滑持续补全。
 - 完成结果使用内存 LRU 缓存；相同配置和文本再次翻译可直接显示，不再次请求 API。
 - 浮窗出现时不抢焦点，靠近选区并自动避让屏幕边缘；主动点击正文后可正常选字和复制。支持关闭、复制原文、复制译文、中英互换、保留、拖动、缩放和纵向滚动。
 - 译文可像普通文本一样框选，右键支持复制和全选；在本程序内框选不会触发新的翻译。
 - 英文译文默认使用 Times New Roman，中文默认使用黑体；两者均可在设置中独立修改。字号可在浮窗平滑调节，也可在设置中指定新窗口默认值。
 - 接近 Apple 内容优先原则的浅色、不透明、无边框圆角界面；字号控制按需展开，复制操作形成统一分组，设置页使用安静的中性色与固定保存栏。
+- 设置中的 `Popup style / 浮窗样式` 可保留默认 `Minimal / 极简`，或切换为 `Bubble / 气泡`、`Bubble 2.0 / 气泡 2.0`：气泡 2.0 使用更圆的轮廓、附着式柔和尾巴、白色高光与低饱和粉蓝紫渐变；高对比度模式会自动保持系统可读性。
 - 断网、鉴权、限流或超时不再让加载窗无故消失；错误会保留在原浮窗中，再次翻译失败时保留旧译文。
 - 单实例运行，避免重复托盘、重复钩子和重复 API 费用。
 - 自动取词默认不再改写系统剪贴板：先使用 UI Automation，再尝试标准 Win32/RichEdit/Scintilla 控件的窗口消息读取。只有在设置中主动打开“Compatibility clipboard fallback”时，才会为微信等自绘应用使用临时 `WM_COPY` 兼容回退。
+- 对 Edge、Chromium 与 Zotero 等文档阅读宿主，鼠标松开后会额外进行两次非剪贴板选区读取，以适配其延后提交的可访问性选区；这不会模拟按键或改写剪贴板。
 
 ## 微信和自绘应用
 
@@ -87,6 +106,7 @@ Windows 应用取词能力并不统一。InstantTranslate 按以下顺序尝试�
 ## 浮窗操作
 
 - “译为中文 / 译为英文”：把当前显示结果翻译为另一种语言，复用原窗口位置和尺寸。
+- “Explain / 解释”：解释本次原文；译文内选中部分文字后出现的“Explain / 解释”只解释该片段。解释始终输出中文，且使用当前设置的中文译文字体。
 - Copy 分组中的“原文 / Source”：复制最初选中的文字。
 - Copy 分组中的“译文 / Translation”：优先复制你在译文中框选的部分，否则复制全部译文。
 - `Aa`：按需展开字号滑杆，避免不调字号时持续占用工具条空间。
@@ -129,6 +149,7 @@ API Key 由密码框录入并保存在 Windows 凭据管理器中，不写入设
 - 使用 DeepSeek Provider 时，原文会发送到你配置的 Endpoint；Mock Provider 完全离线。
 - “使用周围语境”默认关闭；开启后，选区所在段落会作为只读参考一并发送。个人术语库保存在本机设置中，请求时仅发送当前选区命中的术语对。
 - 默认不持久化原文、译文或运行日志。只有点击浮窗编辑按钮并保存的修正，才会进入翻译记忆。
+- AI Explain 会把待解释内容、当前原文与当前译文发送到已配置的 DeepSeek Endpoint 作为只读语境；解释结果仅保留在当前浮窗内存中，不写入翻译记忆、缓存、设置或性能诊断。
 - 翻译记忆最多保存 200 条，使用 Windows DPAPI 绑定当前 Windows 账户加密。精确命中在本机直接返回；相关请求最多向 Provider 发送 3 组你主动保存的示例。设置页可永久清空。
 - 缓存只存在于当前进程内，默认最多 128 条、约 100 万字符预算、20 分钟有效；键中只保留原文指纹而非原文全文，退出即清空。
   - 性能诊断只在内存保留最近 100 组数值和状态；输入捕获诊断仅记录钩子是否运行和最近一次物理鼠标按键时间，不采集原文、译文、凭据、Endpoint 或路径；仅在你选择托盘命令时复制到剪贴板。
@@ -163,7 +184,7 @@ dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --co
 ## 打包
 
 ```powershell
-.\scripts\Publish.ps1 -Version 0.5.4
+.\scripts\Publish.ps1 -Version 0.6.0
 ```
 
 脚本会依次恢复依赖、Release 构建、运行全部测试、发布自包含单文件程序、执行烟雾测试、生成 ZIP 和 SHA-256 校验文件。结果位于 `artifacts/release/`。
@@ -171,7 +192,7 @@ dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --co
 如已在 Windows 证书存储中安装带私钥的代码签名证书，可选签名并验证成品：
 
 ```powershell
-.\scripts\Publish.ps1 -Version 0.5.4 -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
+.\scripts\Publish.ps1 -Version 0.6.0 -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
 ```
 
 也可使用 `-CertificateStoreLocation LocalMachine`、`-TimestampUrl` 或 `-SignToolPath` 指定企业环境。没有证书时成品仍为未签名程序，在部分电脑上首次运行可能出现 Windows SmartScreen“未知发布者”提示。Microsoft Store / MSIX 发布仍需要开发者账户及与该账户匹配的包身份，脚本不会伪造这些信息。

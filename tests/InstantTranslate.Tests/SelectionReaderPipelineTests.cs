@@ -100,6 +100,37 @@ public sealed class SelectionReaderPipelineTests
     }
 
     [Fact]
+    public async Task RetriesSafeReadersForDelayedBrowserLikeSelectionBeforeClipboardFallback()
+    {
+        var primary = new SequenceSelectionReader(null, "延迟出现的 PDF 选区");
+        var nativeFallback = new StubSelectionReader(null);
+        var clipboardFallback = new StubSelectionReader("不应读取剪贴板");
+        var delays = new List<TimeSpan>();
+        var pipeline = new SelectionReaderPipeline(
+            primary,
+            nativeFallback,
+            clipboardFallback,
+            allowClipboardFallback: () => false,
+            requiresStabilizedRead: _ => true,
+            delayAsync: (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            });
+
+        var result = await pipeline.TryReadSelectedTextAsync(
+            new ScreenPoint(10, 20),
+            CancellationToken.None);
+
+        Assert.Equal("延迟出现的 PDF 选区", result);
+        Assert.Equal(2, primary.CallCount);
+        Assert.Equal(1, nativeFallback.CallCount);
+        Assert.Single(delays);
+        Assert.Equal(TimeSpan.FromMilliseconds(85), delays[0]);
+        Assert.Equal(0, clipboardFallback.CallCount);
+    }
+
+    [Fact]
     public async Task ContextualPrimary_PreservesContextOnlyWhenRequested()
     {
         var primary = new ContextualStubSelectionReader();
@@ -144,6 +175,26 @@ public sealed class SelectionReaderPipelineTests
         {
             await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
             return null;
+        }
+    }
+
+    private sealed class SequenceSelectionReader : ISelectionReader
+    {
+        private readonly Queue<string?> _results;
+
+        public SequenceSelectionReader(params string?[] results)
+        {
+            _results = new Queue<string?>(results);
+        }
+
+        public int CallCount { get; private set; }
+
+        public Task<string?> TryReadSelectedTextAsync(
+            ScreenPoint point,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return Task.FromResult(_results.Count > 0 ? _results.Dequeue() : null);
         }
     }
 

@@ -51,6 +51,7 @@ public sealed class SettingsStoreMigrationTests
         Assert.False(migrated.UseSelectionContext);
         Assert.Equal("balanced", migrated.TranslationMode);
         Assert.Equal("natural", migrated.TranslationTone);
+        Assert.Equal(PopupVisualStyleCatalog.DefaultStyleId, migrated.PopupVisualStyle);
     }
 
     [Fact]
@@ -63,6 +64,7 @@ public sealed class SettingsStoreMigrationTests
             ChineseTranslationFontFamily = "Unknown Chinese Font",
             TranslationMode = "turbo",
             TranslationTone = "dramatic",
+            PopupVisualStyle = "unrecognized-style",
             PersonalGlossary = "  API => 接口  ",
             DeepSeekApiKey = "credential-secret",
         };
@@ -74,6 +76,7 @@ public sealed class SettingsStoreMigrationTests
         Assert.Equal("SimHei", normalized.ChineseTranslationFontFamily);
         Assert.Equal("balanced", normalized.TranslationMode);
         Assert.Equal("natural", normalized.TranslationTone);
+        Assert.Equal(PopupVisualStyleCatalog.DefaultStyleId, normalized.PopupVisualStyle);
         Assert.Equal("API => 接口", normalized.PersonalGlossary);
         Assert.Equal("credential-secret", normalized.DeepSeekApiKey);
     }

@@ -24,4 +24,29 @@ public sealed class MockTranslationProviderTests
         Assert.Equal(expected, resultChunk.TextDelta);
         Assert.True(resultChunk.IsFinal);
     }
+
+    [Fact]
+    public async Task ExplainAsync_ReturnsChineseStructuredResult()
+    {
+        var provider = new MockTranslationProvider();
+        var chunks = new List<TranslationChunk>();
+
+        await foreach (var chunk in provider.ExplainAsync(
+                           new ExplanationRequest(
+                               "direct",
+                               "Make it direct.",
+                               "让它直接。",
+                               "English",
+                               "Simplified Chinese",
+                               ExplanationScope.TranslationSelection),
+                           CancellationToken.None))
+        {
+            chunks.Add(chunk);
+        }
+
+        var resultChunk = Assert.Single(chunks);
+        Assert.Contains("释义：direct", resultChunk.TextDelta, StringComparison.Ordinal);
+        Assert.Contains("要点：", resultChunk.TextDelta, StringComparison.Ordinal);
+        Assert.True(resultChunk.IsFinal);
+    }
 }

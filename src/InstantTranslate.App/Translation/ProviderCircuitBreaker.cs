@@ -89,7 +89,7 @@ internal sealed class ProviderCircuitBreaker
 
 internal sealed class CircuitBreakingTranslationProvider(
     IStreamingTranslationProvider inner,
-    ProviderCircuitBreaker circuitBreaker) : IStreamingTranslationProvider
+    ProviderCircuitBreaker circuitBreaker) : IStreamingTranslationProvider, IStreamingExplanationProvider
 {
     public string Id => inner.Id;
 
@@ -97,10 +97,39 @@ internal sealed class CircuitBreakingTranslationProvider(
         TranslationRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        await foreach (var chunk in StreamWithCircuitBreakerAsync(
+                           inner.TranslateAsync(request, cancellationToken),
+                           cancellationToken))
+        {
+            yield return chunk;
+        }
+    }
+
+    public async IAsyncEnumerable<TranslationChunk> ExplainAsync(
+        ExplanationRequest request,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (inner is not IStreamingExplanationProvider explanationProvider)
+        {
+            throw new TranslationProviderException(
+                "当前 Provider 不支持 AI 解释。",
+                TranslationFailureKind.Configuration);
+        }
+
+        await foreach (var chunk in StreamWithCircuitBreakerAsync(
+                           explanationProvider.ExplainAsync(request, cancellationToken),
+                           cancellationToken))
+        {
+            yield return chunk;
+        }
+    }
+
+    private async IAsyncEnumerable<TranslationChunk> StreamWithCircuitBreakerAsync(
+        IAsyncEnumerable<TranslationChunk> stream,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         circuitBreaker.ThrowIfOpen();
-        await using var enumerator = inner
-            .TranslateAsync(request, cancellationToken)
-            .GetAsyncEnumerator(cancellationToken);
+        await using var enumerator = stream.GetAsyncEnumerator(cancellationToken);
 
         while (true)
         {

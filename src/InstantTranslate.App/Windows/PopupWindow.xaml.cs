@@ -5,12 +5,16 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using InstantTranslate.Interop;
 using InstantTranslate.Models;
+using InstantTranslate.Selection;
+using InstantTranslate.Settings;
 using InstantTranslate.Translation;
 using Forms = System.Windows.Forms;
 using WpfClipboard = System.Windows.Clipboard;
 using WpfButton = System.Windows.Controls.Button;
+using WpfCanvas = System.Windows.Controls.Canvas;
 
 namespace InstantTranslate.Windows;
 
@@ -20,9 +24,27 @@ internal partial class PopupWindow : Window
     private const string DefaultEnglishTranslationFontFamily = "Times New Roman";
     private const string DefaultChineseTranslationFontFamily = "SimHei, 黑体, Microsoft YaHei UI";
     private const int AutomaticSizeGrowthThreshold = 12;
+    private const double MinimumExplanationWindowHeight = 278;
+    private const double BubbleHorizontalInset = 12;
+    private const double BubbleVerticalInset = 3;
+    private const double BubbleV2HorizontalInset = 14;
+    private const double BubbleV2VerticalInset = 4;
+    private const int StreamingRevealInitialCharacters = 12;
+    private const int StreamingRevealTargetFrames = 4;
+    private const int StreamingRevealMinimumCharactersPerFrame = 4;
+    private const int StreamingRevealMaximumCharactersPerFrame = 96;
+    private static readonly TimeSpan StreamingRevealInterval = TimeSpan.FromMilliseconds(16);
+    private static readonly Geometry LegacyBubbleLeftTailGeometry = CreateFrozenGeometry("M0,0 L18,8 L0,16 Z");
+    private static readonly Geometry LegacyBubbleRightTailGeometry = CreateFrozenGeometry("M18,0 L0,8 L18,16 Z");
+    private static readonly Geometry BubbleV2LeftTailGeometry = CreateFrozenGeometry(
+        "M0,8 C4,5 8,2 16,0 C13,5 13,11 16,16 C8,14 4,11 0,8 Z");
+    private static readonly Geometry BubbleV2RightTailGeometry = CreateFrozenGeometry(
+        "M16,8 C12,5 8,2 0,0 C3,5 3,11 0,16 C8,14 12,11 16,8 Z");
     private System.Windows.Media.FontFamily _chineseTranslationFont;
     private System.Windows.Media.FontFamily _englishTranslationFont;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
+    private readonly DispatcherTimer _translationRevealTimer;
+    private readonly DispatcherTimer _explanationRevealTimer;
     private HwndSource? _hwndSource;
     private IntPtr _windowHandle;
     private string _sourceText = string.Empty;
@@ -36,6 +58,9 @@ internal partial class PopupWindow : Window
     private bool _hasDisplayedTranslation;
     private Paragraph? _translationParagraph;
     private string _renderedTranslation = string.Empty;
+    private string _translationRevealTarget = string.Empty;
+    private bool _completeTranslationAfterReveal;
+    private bool _replaceTranslationOnNextUpdate;
     private int _copyFeedbackVersion;
     private bool _isRepositionPending;
     private string _uiLanguage = "en";
@@ -45,18 +70,40 @@ internal partial class PopupWindow : Window
     private bool _isEditingTranslation;
     private bool _isAutomaticSizing;
     private int _lastAutomaticSizeTextLength;
+    private string _explanationText = string.Empty;
+    private Paragraph? _explanationParagraph;
+    private string _renderedExplanation = string.Empty;
+    private string _explanationRevealTarget = string.Empty;
+    private string _selectedExplanationText = string.Empty;
+    private ExplanationInvocation? _lastExplanationInvocation;
+    private bool _isExplanationVisible;
+    private int _selectionActionVersion;
+    private bool _isBubbleVisualStyle;
+    private bool _isBubbleV2VisualStyle;
 
     public PopupWindow(
         long requestId,
         double defaultFontSize = DefaultTranslationFontSize,
         string englishFontFamily = DefaultEnglishTranslationFontFamily,
         string chineseFontFamily = DefaultChineseTranslationFontFamily,
-        string uiLanguage = "en")
+        string uiLanguage = "en",
+        string popupVisualStyle = PopupVisualStyleCatalog.DefaultStyleId)
     {
         RequestId = requestId;
         _englishTranslationFont = CreateFontFamily(englishFontFamily, DefaultEnglishTranslationFontFamily);
         _chineseTranslationFont = CreateFontFamily(chineseFontFamily, DefaultChineseTranslationFontFamily);
         InitializeComponent();
+        _translationRevealTimer = new DispatcherTimer(DispatcherPriority.Render, Dispatcher)
+        {
+            Interval = StreamingRevealInterval,
+        };
+        _translationRevealTimer.Tick += TranslationRevealTimer_Tick;
+        _explanationRevealTimer = new DispatcherTimer(DispatcherPriority.Render, Dispatcher)
+        {
+            Interval = StreamingRevealInterval,
+        };
+        _explanationRevealTimer.Tick += ExplanationRevealTimer_Tick;
+        ApplyVisualStyle(popupVisualStyle);
         TranslationRichTextBox.FontFamily = _englishTranslationFont;
         FontSizeSlider.Value = Math.Clamp(defaultFontSize, FontSizeSlider.Minimum, FontSizeSlider.Maximum);
         ApplyUiLanguage(uiLanguage);
@@ -79,6 +126,8 @@ internal partial class PopupWindow : Window
 
     public string CurrentTargetLanguage => _targetLanguage;
 
+    public string CurrentTranslationText => _translatedText;
+
     public ScreenPoint AnchorPoint => _anchorPoint;
 
     public bool ContainsScreenPoint(ScreenPoint point)
@@ -95,6 +144,10 @@ internal partial class PopupWindow : Window
 
     public event Func<PopupWindow, string, bool>? CorrectionSaveRequested;
 
+    public event Action<PopupWindow, string, ExplanationScope>? ExplanationRequested;
+
+    public event Action<PopupWindow>? ExplanationDismissed;
+
     public void ApplyUiLanguage(string? uiLanguage)
     {
         _uiLanguage = string.Equals(uiLanguage, "zh-CN", StringComparison.OrdinalIgnoreCase)
@@ -105,6 +158,10 @@ internal partial class PopupWindow : Window
         FontSizeButton.ToolTip = Localize("Text size", "文字大小");
         FontSizePanel.ToolTip = Localize("Drag to adjust text size", "拖动调节字体大小");
         DirectionButton.ToolTip = Localize("Switch translation language", "切换翻译语言");
+        ExplainButton.Content = Localize("Explain", "解释");
+        ExplainButton.ToolTip = Localize("Explain source text", "解释原文");
+        SelectionExplainButton.Content = Localize("Explain", "解释");
+        SelectionExplainButton.ToolTip = Localize("Explain selected translation", "解释所选译文");
         CopySourceButton.Content = Localize("Source", "原文");
         CopyTranslationButton.Content = Localize("Translation", "译文");
         CopySourceButton.ToolTip = Localize("Copy source", "复制原文");
@@ -116,14 +173,29 @@ internal partial class PopupWindow : Window
             ? Localize("Release window", "取消保留")
             : Localize("Keep window", "保留此窗口");
         CloseButton.ToolTip = Localize("Close", "关闭");
+        ExplanationTitleText.Text = Localize("AI Explain", "AI 解释");
+        ExplanationCopyButton.Content = Localize("Copy", "复制");
+        ExplanationCopyButton.ToolTip = Localize("Copy explanation", "复制解释");
+        ExplanationRetryButton.Content = Localize("Retry", "重试");
+        ExplanationRetryButton.ToolTip = Localize("Retry explanation", "重新解释");
+        ExplanationBackButton.Content = Localize("Back", "返回");
+        ExplanationBackButton.ToolTip = Localize("Back to translation", "返回译文");
         CopySelectionMenuItem.Header = Localize("Copy", "复制");
         SelectAllMenuItem.Header = Localize("Select all", "全选");
+        CopyExplanationSelectionMenuItem.Header = Localize("Copy", "复制");
+        SelectAllExplanationMenuItem.Header = Localize("Select all", "全选");
         System.Windows.Automation.AutomationProperties.SetName(
             FontSizeButton,
             Localize("Text size", "文字大小"));
         System.Windows.Automation.AutomationProperties.SetName(
             DirectionButton,
             Localize("Switch translation language", "切换翻译语言"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            ExplainButton,
+            Localize("Explain source text", "解释原文"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            SelectionExplainButton,
+            Localize("Explain selected translation", "解释所选译文"));
         System.Windows.Automation.AutomationProperties.SetName(
             CopySourceButton,
             Localize("Copy source", "复制原文"));
@@ -141,6 +213,15 @@ internal partial class PopupWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(
             CloseButton,
             Localize("Close", "关闭"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            ExplanationCopyButton,
+            Localize("Copy explanation", "复制解释"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            ExplanationRetryButton,
+            Localize("Retry explanation", "重新解释"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            ExplanationBackButton,
+            Localize("Back to translation", "返回译文"));
 
         UpdateDirectionButtonText();
         UpdateBodyMessageText();
@@ -150,7 +231,8 @@ internal partial class PopupWindow : Window
     public void ApplyAppearance(
         string? englishFontFamily,
         string? chineseFontFamily,
-        string? uiLanguage)
+        string? uiLanguage,
+        string? popupVisualStyle)
     {
         _englishTranslationFont = CreateFontFamily(
             englishFontFamily,
@@ -158,14 +240,106 @@ internal partial class PopupWindow : Window
         _chineseTranslationFont = CreateFontFamily(
             chineseFontFamily,
             DefaultChineseTranslationFontFamily);
+        ApplyVisualStyle(popupVisualStyle);
         ApplyUiLanguage(uiLanguage);
 
         if (_translatedText.Length > 0)
         {
+            var completeAfterAppearanceUpdate = _completeTranslationAfterReveal;
+            StopTranslationReveal(clearTarget: false);
+            _translationRevealTarget = _translatedText;
             _translationParagraph = null;
             _renderedTranslation = string.Empty;
             SetTranslationText(_translatedText);
+            if (completeAfterAppearanceUpdate)
+            {
+                CompleteTranslationPresentation();
+            }
         }
+
+        if (_explanationText.Length > 0)
+        {
+            StopExplanationReveal(clearTarget: false);
+            _explanationRevealTarget = _explanationText;
+            _explanationParagraph = null;
+            _renderedExplanation = string.Empty;
+            SetExplanationText(_explanationText);
+        }
+
+        if (_isAutomaticSizing && _translatedText.Length > 0)
+        {
+            ApplyAutomaticSize(_translatedText, _anchorPoint, force: true);
+        }
+        else if (IsVisible && !IsPinned)
+        {
+            SchedulePositionNearAnchor();
+        }
+    }
+
+    private void ApplyVisualStyle(string? popupVisualStyle)
+    {
+        var normalizedStyle = PopupVisualStyleCatalog.Normalize(popupVisualStyle);
+        _isBubbleVisualStyle = PopupVisualStyleCatalog.IsBubble(normalizedStyle)
+            && !SystemParameters.HighContrast;
+        _isBubbleV2VisualStyle = _isBubbleVisualStyle
+            && PopupVisualStyleCatalog.IsBubbleV2(normalizedStyle);
+
+        PopupSurface.Margin = _isBubbleVisualStyle
+            ? new Thickness(
+                CurrentBubbleHorizontalInset,
+                CurrentBubbleVerticalInset,
+                CurrentBubbleHorizontalInset,
+                CurrentBubbleVerticalInset)
+            : new Thickness(0);
+        PopupSurface.Padding = _isBubbleV2VisualStyle
+            ? new Thickness(17, 15, 17, 15)
+            : new Thickness(16, 14, 16, 14);
+        BubbleHighlight.Visibility = _isBubbleVisualStyle ? Visibility.Visible : Visibility.Collapsed;
+        ConfigureBubbleTailGeometry();
+        UpdateBubbleTailDirection(windowIsLeftOfAnchor: false);
+
+        if (SizeToContent == SizeToContent.Manual)
+        {
+            ConfigureResizableLayout(_anchorPoint);
+        }
+
+        UpdatePopupSurfaceClip();
+    }
+
+    private void UpdateBubbleTailDirection(bool windowIsLeftOfAnchor)
+    {
+        BubbleLeftTail.Visibility = _isBubbleVisualStyle && !windowIsLeftOfAnchor
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        BubbleRightTail.Visibility = _isBubbleVisualStyle && windowIsLeftOfAnchor
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private double CurrentBubbleHorizontalInset => _isBubbleV2VisualStyle
+        ? BubbleV2HorizontalInset
+        : BubbleHorizontalInset;
+
+    private double CurrentBubbleVerticalInset => _isBubbleV2VisualStyle
+        ? BubbleV2VerticalInset
+        : BubbleVerticalInset;
+
+    private double PopupSurfaceHorizontalInset => _isBubbleVisualStyle ? CurrentBubbleHorizontalInset * 2 : 0;
+
+    private double PopupSurfaceVerticalInset => _isBubbleVisualStyle ? CurrentBubbleVerticalInset * 2 : 0;
+
+    private void ConfigureBubbleTailGeometry()
+    {
+        BubbleLeftTail.Data = _isBubbleV2VisualStyle
+            ? BubbleV2LeftTailGeometry
+            : LegacyBubbleLeftTailGeometry;
+        BubbleRightTail.Data = _isBubbleV2VisualStyle
+            ? BubbleV2RightTailGeometry
+            : LegacyBubbleRightTailGeometry;
+        WpfCanvas.SetLeft(BubbleLeftTail, _isBubbleV2VisualStyle ? 0 : 2);
+        WpfCanvas.SetRight(BubbleRightTail, _isBubbleV2VisualStyle ? 0 : 2);
+        WpfCanvas.SetTop(BubbleLeftTail, _isBubbleV2VisualStyle ? 30 : 31);
+        WpfCanvas.SetTop(BubbleRightTail, _isBubbleV2VisualStyle ? 30 : 31);
     }
 
     internal void SelectTextForVisualTest(int start, int length)
@@ -187,6 +361,7 @@ internal partial class PopupWindow : Window
         Activate();
         TranslationRichTextBox.Focus();
         TranslationRichTextBox.Selection.Select(selectionStart, selectionEnd);
+        ScheduleSelectionExplainButton();
     }
 
     internal void ConfigureViewportForVisualTest(double width, double height, double fontSize)
@@ -203,8 +378,18 @@ internal partial class PopupWindow : Window
         return IsActive
             && TranslationRichTextBox.IsKeyboardFocusWithin
             && !TranslationRichTextBox.Selection.IsEmpty
-            && !string.IsNullOrWhiteSpace(TranslationRichTextBox.Selection.Text);
+               && !string.IsNullOrWhiteSpace(TranslationRichTextBox.Selection.Text);
     }
+
+    internal bool HasSelectionExplainButtonForVisualTest() =>
+        SelectionExplainButton.Visibility == Visibility.Visible;
+
+    internal bool IsExplanationVisibleForVisualTest() =>
+        _isExplanationVisible && ExplanationOverlay.Visibility == Visibility.Visible;
+
+    internal bool IsBubbleVisualStyleForVisualTest() => _isBubbleVisualStyle;
+
+    internal bool IsBubbleV2VisualStyleForVisualTest() => _isBubbleV2VisualStyle;
 
     internal bool HasVerticalOverflowForVisualTest()
     {
@@ -214,7 +399,12 @@ internal partial class PopupWindow : Window
 
     public void ShowLoading(ScreenPoint anchorPoint)
     {
+        HideExplanation(notifyDismissed: true);
+        HideSelectionExplainButton();
         CancelTranslationEditing(showStatus: false);
+        var isRetranslating = _hasDisplayedTranslation;
+        StopTranslationReveal(clearTarget: true);
+        _replaceTranslationOnNextUpdate = isRetranslating;
         if (_hasDisplayedTranslation)
         {
             PreserveCurrentWindowSize();
@@ -238,6 +428,7 @@ internal partial class PopupWindow : Window
         CopySourceButton.IsEnabled = false;
         CopyTranslationButton.IsEnabled = false;
         EditTranslationButton.IsEnabled = false;
+        ExplainButton.IsEnabled = false;
         if (_hasDisplayedTranslation)
         {
             ShowAt(anchorPoint);
@@ -251,6 +442,13 @@ internal partial class PopupWindow : Window
         ScreenPoint anchorPoint,
         string sourceLanguage = "自动检测")
     {
+        HideSelectionExplainButton();
+        var startsNewTranslation = !_hasDisplayedTranslation
+            || _replaceTranslationOnNextUpdate
+            || !string.Equals(_currentTranslationSourceText, sourceText, StringComparison.Ordinal)
+            || !string.Equals(_targetLanguage, targetLanguage, StringComparison.Ordinal)
+            || (_translationRevealTarget.Length > 0
+                && !translatedText.StartsWith(_translationRevealTarget, StringComparison.Ordinal));
         if (string.IsNullOrEmpty(_sourceText))
         {
             _sourceText = sourceText;
@@ -260,6 +458,7 @@ internal partial class PopupWindow : Window
         _translatedText = translatedText;
         _targetLanguage = targetLanguage;
         _anchorPoint = anchorPoint;
+        _replaceTranslationOnNextUpdate = false;
 
         var isFirstTranslationUpdate = !_hasDisplayedTranslation;
         if (isFirstTranslationUpdate)
@@ -268,7 +467,7 @@ internal partial class PopupWindow : Window
             _lastAutomaticSizeTextLength = 0;
         }
 
-        SetTranslationText(translatedText);
+        QueueTranslationReveal(translatedText, resetVisibleText: startsNewTranslation);
         UpdateDirectionButtonText();
         LoadingPanel.Visibility = Visibility.Collapsed;
         SetActionBarVisibility(Visibility.Visible);
@@ -276,6 +475,7 @@ internal partial class PopupWindow : Window
         CopySourceButton.IsEnabled = true;
         CopyTranslationButton.IsEnabled = true;
         EditTranslationButton.IsEnabled = false;
+        ExplainButton.IsEnabled = false;
         TranslationRichTextBox.Visibility = Visibility.Visible;
         HideActionStatus();
         _hasDisplayedTranslation = true;
@@ -288,6 +488,20 @@ internal partial class PopupWindow : Window
 
     public void MarkTranslationComplete()
     {
+        if (_renderedTranslation.Length < _translationRevealTarget.Length)
+        {
+            _completeTranslationAfterReveal = true;
+            EnsureTranslationRevealTimer();
+            return;
+        }
+
+        CompleteTranslationPresentation();
+    }
+
+    private void CompleteTranslationPresentation()
+    {
+        _completeTranslationAfterReveal = false;
+        _translationRevealTimer.Stop();
         ApplyAutomaticSize(_translatedText, _anchorPoint, force: true);
         if (!string.IsNullOrWhiteSpace(_translatedText))
         {
@@ -304,6 +518,7 @@ internal partial class PopupWindow : Window
             CopySourceButton.IsEnabled = true;
             CopyTranslationButton.IsEnabled = true;
             EditTranslationButton.IsEnabled = true;
+            ExplainButton.IsEnabled = true;
         }
     }
 
@@ -319,6 +534,10 @@ internal partial class PopupWindow : Window
         _currentSourceLanguage = completed.SourceLanguage;
         _translatedText = completed.TranslatedText;
         _targetLanguage = completed.TargetLanguage;
+        StopTranslationReveal(clearTarget: true);
+        _translationRevealTarget = _translatedText;
+        _translationParagraph = null;
+        _renderedTranslation = string.Empty;
         SetTranslationText(_translatedText);
         UpdateDirectionButtonText();
 
@@ -328,12 +547,15 @@ internal partial class PopupWindow : Window
         CopySourceButton.IsEnabled = true;
         CopyTranslationButton.IsEnabled = true;
         EditTranslationButton.IsEnabled = true;
+        ExplainButton.IsEnabled = true;
         TranslationRichTextBox.Visibility = Visibility.Visible;
         ShowActionStatus(ActionMessageKind.TranslationFailedPreserved);
     }
 
     public void ShowFailure(string? message = null)
     {
+        StopTranslationReveal(clearTarget: true);
+        _replaceTranslationOnNextUpdate = false;
         _customFailureMessage = string.IsNullOrWhiteSpace(message) ? null : message;
         _bodyMessageKind = _customFailureMessage is null
             ? BodyMessageKind.Failure
@@ -345,13 +567,115 @@ internal partial class PopupWindow : Window
         CopySourceButton.IsEnabled = false;
         CopyTranslationButton.IsEnabled = false;
         EditTranslationButton.IsEnabled = false;
+        ExplainButton.IsEnabled = false;
         LoadingPanel.Visibility = Visibility.Visible;
         ShowAt(_anchorPoint);
+    }
+
+    public void ShowExplanationLoading()
+    {
+        if (!HasTranslation || _isEditingTranslation)
+        {
+            return;
+        }
+
+        PreserveCurrentWindowSize();
+        Height = Math.Min(MaxHeight, Math.Max(ActualHeight, MinimumExplanationWindowHeight));
+        if (IsVisible && !IsPinned)
+        {
+            SchedulePositionNearAnchor();
+        }
+        _isExplanationVisible = true;
+        _explanationText = string.Empty;
+        StopExplanationReveal(clearTarget: true);
+        _explanationParagraph = null;
+        _renderedExplanation = string.Empty;
+        HideSelectionExplainButton();
+        ExplanationOverlay.Visibility = Visibility.Visible;
+        ExplanationStatusText.Text = Localize("Analyzing…", "正在分析…");
+        ExplanationStatusText.Visibility = Visibility.Visible;
+        ExplanationRichTextBox.Document.Blocks.Clear();
+        ExplanationRichTextBox.Visibility = Visibility.Collapsed;
+        ExplanationCopyButton.IsEnabled = false;
+        ExplanationRetryButton.Visibility = Visibility.Collapsed;
+        ExplainButton.Tag = "Selected";
+        ExplainButton.IsEnabled = false;
+    }
+
+    public void ShowExplanation(string explanation)
+    {
+        if (!_isExplanationVisible)
+        {
+            return;
+        }
+
+        var startsNewExplanation = _explanationRevealTarget.Length == 0
+            || !explanation.StartsWith(_explanationRevealTarget, StringComparison.Ordinal);
+        _explanationText = explanation;
+        QueueExplanationReveal(explanation, resetVisibleText: startsNewExplanation);
+        ExplanationStatusText.Visibility = Visibility.Collapsed;
+        ExplanationRichTextBox.Visibility = Visibility.Visible;
+        ExplanationCopyButton.IsEnabled = !string.IsNullOrWhiteSpace(explanation);
+        ExplanationRetryButton.Visibility = Visibility.Collapsed;
+    }
+
+    public void ShowExplanationFailure(string message)
+    {
+        if (!_isExplanationVisible)
+        {
+            return;
+        }
+
+        _explanationText = string.Empty;
+        StopExplanationReveal(clearTarget: true);
+        _explanationParagraph = null;
+        _renderedExplanation = string.Empty;
+        ExplanationRichTextBox.Document.Blocks.Clear();
+        ExplanationRichTextBox.Visibility = Visibility.Collapsed;
+        ExplanationStatusText.Text = message;
+        ExplanationStatusText.Visibility = Visibility.Visible;
+        ExplanationCopyButton.IsEnabled = false;
+        ExplanationRetryButton.Visibility = _lastExplanationInvocation is null
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
+
+    public void HideExplanation(bool notifyDismissed)
+    {
+        var wasVisible = _isExplanationVisible || ExplanationOverlay.Visibility == Visibility.Visible;
+        _isExplanationVisible = false;
+        _explanationText = string.Empty;
+        StopExplanationReveal(clearTarget: true);
+        _explanationParagraph = null;
+        _renderedExplanation = string.Empty;
+        ExplanationOverlay.Visibility = Visibility.Collapsed;
+        ExplanationStatusText.Visibility = Visibility.Collapsed;
+        ExplanationRichTextBox.Document.Blocks.Clear();
+        ExplanationRichTextBox.Visibility = Visibility.Collapsed;
+        ExplanationCopyButton.IsEnabled = false;
+        ExplanationRetryButton.Visibility = Visibility.Collapsed;
+        ExplainButton.Tag = null;
+        ExplainButton.IsEnabled = HasTranslation && !_isEditingTranslation;
+
+        if (wasVisible && notifyDismissed)
+        {
+            _lastExplanationInvocation = null;
+            ExplanationDismissed?.Invoke(this);
+        }
+
+        if (wasVisible)
+        {
+            ScheduleSelectionExplainButton();
+        }
     }
 
     protected override void OnClosed(EventArgs e)
     {
         SourceInitialized -= OnSourceInitialized;
+        StopTranslationReveal(clearTarget: true);
+        StopExplanationReveal(clearTarget: true);
+        _translationRevealTimer.Tick -= TranslationRevealTimer_Tick;
+        _explanationRevealTimer.Tick -= ExplanationRevealTimer_Tick;
         _lifetimeCancellation.Cancel();
         BeginAnimation(OpacityProperty, null);
         if (_hwndSource is not null)
@@ -361,12 +685,19 @@ internal partial class PopupWindow : Window
         }
 
         TranslationRichTextBox.Document.Blocks.Clear();
+        ExplanationRichTextBox.Document.Blocks.Clear();
         _translationParagraph = null;
         _renderedTranslation = string.Empty;
+        _explanationParagraph = null;
+        _renderedExplanation = string.Empty;
         _sourceText = string.Empty;
         _currentTranslationSourceText = string.Empty;
         _currentSourceLanguage = "自动检测";
         _translatedText = string.Empty;
+        _explanationText = string.Empty;
+        _selectedExplanationText = string.Empty;
+        _lastExplanationInvocation = null;
+        _isExplanationVisible = false;
         _lastCompletedTranslation = null;
         _windowHandle = IntPtr.Zero;
         base.OnClosed(e);
@@ -396,6 +727,7 @@ internal partial class PopupWindow : Window
         }
 
         UpdateLayout();
+        UpdatePopupSurfaceClip();
         if (!IsPinned || !wasVisible)
         {
             PositionNear(anchorPoint);
@@ -504,8 +836,46 @@ internal partial class PopupWindow : Window
             return;
         }
 
+        HideExplanation(notifyDismissed: true);
         var nextTarget = LanguageDirectionResolver.GetOppositeTarget(_targetLanguage);
         RetranslateRequested?.Invoke(this, nextTarget);
+    }
+
+    private void ExplainButton_Click(object sender, RoutedEventArgs e)
+    {
+        RequestExplanation(
+            ExplanationScope.SourceText,
+            _currentTranslationSourceText);
+    }
+
+    private void SelectionExplainButton_Click(object sender, RoutedEventArgs e)
+    {
+        RequestExplanation(
+            ExplanationScope.TranslationSelection,
+            _selectedExplanationText);
+    }
+
+    private async void ExplanationCopyButton_Click(object sender, RoutedEventArgs e)
+    {
+        var selectedText = TextNormalizer.Normalize(ExplanationRichTextBox.Selection.Text);
+        await CopyWithFeedbackAsync(
+            ExplanationCopyButton,
+            string.IsNullOrWhiteSpace(selectedText) ? _explanationText : selectedText);
+    }
+
+    private void ExplanationRetryButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastExplanationInvocation is not { } invocation)
+        {
+            return;
+        }
+
+        RequestExplanation(invocation.Scope, invocation.SubjectText);
+    }
+
+    private void ExplanationBackButton_Click(object sender, RoutedEventArgs e)
+    {
+        HideExplanation(notifyDismissed: true);
     }
 
     private void FontSizeButton_Click(object sender, RoutedEventArgs e)
@@ -558,7 +928,11 @@ internal partial class PopupWindow : Window
 
         if (e.Key == Key.Escape)
         {
-            if (_isEditingTranslation)
+            if (_isExplanationVisible)
+            {
+                HideExplanation(notifyDismissed: true);
+            }
+            else if (_isEditingTranslation)
             {
                 CancelTranslationEditing(showStatus: false);
             }
@@ -605,6 +979,7 @@ internal partial class PopupWindow : Window
             return;
         }
 
+        HideExplanation(notifyDismissed: true);
         _translationBeforeEdit = _translatedText;
         _isEditingTranslation = true;
         TranslationRichTextBox.IsReadOnly = false;
@@ -684,10 +1059,132 @@ internal partial class PopupWindow : Window
             _currentSourceLanguage,
             translation,
             _targetLanguage);
+        StopTranslationReveal(clearTarget: true);
+        _translationRevealTarget = translation;
         _translationParagraph = null;
         _renderedTranslation = string.Empty;
         SetTranslationText(translation);
+        ExplainButton.IsEnabled = HasTranslation;
         ApplyUiLanguage(_uiLanguage);
+    }
+
+    private void RequestExplanation(ExplanationScope scope, string? subjectText)
+    {
+        if (!HasTranslation || _isEditingTranslation)
+        {
+            return;
+        }
+
+        var normalizedSubject = TextNormalizer.Normalize(subjectText);
+        if (string.IsNullOrWhiteSpace(normalizedSubject)
+            || string.IsNullOrWhiteSpace(_currentTranslationSourceText)
+            || string.IsNullOrWhiteSpace(_translatedText))
+        {
+            return;
+        }
+
+        _lastExplanationInvocation = new ExplanationInvocation(normalizedSubject, scope);
+        ShowExplanationLoading();
+        if (ExplanationRequested is { } requested)
+        {
+            requested(this, normalizedSubject, scope);
+            return;
+        }
+
+        ShowExplanationFailure(Localize(
+            "AI Explain is unavailable. Try again.",
+            "AI 解释暂不可用，请重试。"));
+    }
+
+    private void TranslationRichTextBox_SelectionChanged(object sender, RoutedEventArgs e)
+    {
+        if (!CanShowSelectionExplainButton())
+        {
+            HideSelectionExplainButton();
+            return;
+        }
+
+        _selectedExplanationText = TextNormalizer.Normalize(TranslationRichTextBox.Selection.Text);
+        if (string.IsNullOrWhiteSpace(_selectedExplanationText))
+        {
+            HideSelectionExplainButton();
+            return;
+        }
+
+        ScheduleSelectionExplainButton();
+    }
+
+    private bool CanShowSelectionExplainButton()
+    {
+        return HasTranslation
+               && !_isEditingTranslation
+               && !_isExplanationVisible
+               && TranslationRichTextBox.Visibility == Visibility.Visible
+               && !TranslationRichTextBox.Selection.IsEmpty;
+    }
+
+    private void ScheduleSelectionExplainButton()
+    {
+        var version = ++_selectionActionVersion;
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (version == _selectionActionVersion)
+                {
+                    PositionSelectionExplainButton();
+                }
+            },
+            System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    private void PositionSelectionExplainButton()
+    {
+        if (!CanShowSelectionExplainButton())
+        {
+            HideSelectionExplainButton();
+            return;
+        }
+
+        var selectedText = TextNormalizer.Normalize(TranslationRichTextBox.Selection.Text);
+        if (string.IsNullOrWhiteSpace(selectedText))
+        {
+            HideSelectionExplainButton();
+            return;
+        }
+
+        _selectedExplanationText = selectedText;
+        TranslationRichTextBox.Margin = new Thickness(0, 0, 0, 36);
+        TranslationRichTextBox.UpdateLayout();
+        PopupContentGrid.UpdateLayout();
+        SelectionActionLayer.UpdateLayout();
+        SelectionExplainButton.Visibility = Visibility.Visible;
+        SelectionExplainButton.Measure(new System.Windows.Size(
+            double.PositiveInfinity,
+            double.PositiveInfinity));
+
+        var buttonWidth = Math.Max(SelectionExplainButton.DesiredSize.Width, 62);
+        var buttonHeight = Math.Max(SelectionExplainButton.DesiredSize.Height, 28);
+        var availableWidth = Math.Max(buttonWidth + 8, SelectionActionLayer.ActualWidth);
+        var availableHeight = Math.Max(buttonHeight + 8, SelectionActionLayer.ActualHeight);
+        var left = Math.Max(4, availableWidth - buttonWidth - 2);
+        var top = Math.Max(4, availableHeight - buttonHeight - 2);
+
+        WpfCanvas.SetLeft(SelectionExplainButton, left);
+        WpfCanvas.SetTop(SelectionExplainButton, top);
+    }
+
+    private void HideSelectionExplainButton()
+    {
+        _selectionActionVersion++;
+        _selectedExplanationText = string.Empty;
+        if (TranslationRichTextBox is not null)
+        {
+            TranslationRichTextBox.Margin = new Thickness(0);
+        }
+        if (SelectionExplainButton is not null)
+        {
+            SelectionExplainButton.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void PopupSurface_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -695,6 +1192,7 @@ internal partial class PopupWindow : Window
         if (!IsPinned
             || e.ChangedButton != MouseButton.Left
             || TranslationRichTextBox.IsMouseOver
+            || ExplanationOverlay.IsMouseOver
             || ActionPanel.IsMouseOver)
         {
             return;
@@ -767,8 +1265,8 @@ internal partial class PopupWindow : Window
         var dpi = VisualTreeHelper.GetDpi(this);
         MaxWidth = Math.Max(MinWidth, (screen.WorkingArea.Width - 16) / dpi.DpiScaleX);
         MaxHeight = Math.Max(MinHeight, (screen.WorkingArea.Height - 16) / dpi.DpiScaleY);
-        PopupSurface.MaxWidth = MaxWidth;
-        PopupSurface.MaxHeight = MaxHeight;
+        PopupSurface.MaxWidth = Math.Max(1, MaxWidth - PopupSurfaceHorizontalInset);
+        PopupSurface.MaxHeight = Math.Max(1, MaxHeight - PopupSurfaceVerticalInset);
     }
 
     private void ApplyAutomaticSize(string text, ScreenPoint anchorPoint, bool force)
@@ -788,17 +1286,19 @@ internal partial class PopupWindow : Window
         _lastAutomaticSizeTextLength = text.Length;
         ConfigureResizableLayout(anchorPoint);
         ActionBarSurface.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var surfaceMaximumWidth = Math.Max(1, MaxWidth - PopupSurfaceHorizontalInset);
+        var surfaceMaximumHeight = Math.Max(1, MaxHeight - PopupSurfaceVerticalInset);
         var targetSize = PopupAutoSizeCalculator.Calculate(
             text,
             FontSizeSlider.Value,
-            MaxWidth,
-            MaxHeight,
-            ActionBarSurface.DesiredSize.Width);
+            surfaceMaximumWidth,
+            surfaceMaximumHeight,
+            Math.Max(0, ActionBarSurface.DesiredSize.Width - PopupSurfaceHorizontalInset));
 
         var currentWidth = IsVisible && ActualWidth > 0 ? ActualWidth : 0;
         var currentHeight = IsVisible && ActualHeight > 0 ? ActualHeight : 0;
-        var targetWidth = Math.Max(currentWidth, targetSize.Width);
-        var targetHeight = Math.Max(currentHeight, targetSize.Height);
+        var targetWidth = Math.Max(currentWidth, targetSize.Width + PopupSurfaceHorizontalInset);
+        var targetHeight = Math.Max(currentHeight, targetSize.Height + PopupSurfaceVerticalInset);
         var sizeChanged = Math.Abs(Width - targetWidth) > 0.5
                           || Math.Abs(Height - targetHeight) > 0.5;
         Width = targetWidth;
@@ -852,6 +1352,12 @@ internal partial class PopupWindow : Window
             ? DefaultTranslationFontSize
             : FontSizeSlider.Value;
         if (_translationParagraph is not null
+            && string.Equals(text, _renderedTranslation, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (_translationParagraph is not null
             && text.StartsWith(_renderedTranslation, StringComparison.Ordinal)
             && text.Length > _renderedTranslation.Length)
         {
@@ -885,15 +1391,240 @@ internal partial class PopupWindow : Window
         ApplyTranslationFontSize(fontSize);
     }
 
+    private void SetExplanationText(string text)
+    {
+        var fontSize = FontSizeSlider is null || double.IsNaN(FontSizeSlider.Value)
+            ? DefaultTranslationFontSize
+            : FontSizeSlider.Value;
+        if (_explanationParagraph is not null
+            && string.Equals(text, _renderedExplanation, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (_explanationParagraph is not null
+            && text.StartsWith(_renderedExplanation, StringComparison.Ordinal)
+            && text.Length > _renderedExplanation.Length)
+        {
+            AppendExplanationText(_explanationParagraph, text[_renderedExplanation.Length..]);
+            _renderedExplanation = text;
+            ApplyExplanationFontSize(fontSize);
+            return;
+        }
+
+        var paragraph = new Paragraph()
+        {
+            Margin = new Thickness(0),
+            LineHeight = CalculateLineHeight(fontSize),
+            FontFamily = _chineseTranslationFont,
+        };
+        AppendExplanationText(paragraph, text);
+
+        ExplanationRichTextBox.Document = new FlowDocument(paragraph)
+        {
+            PagePadding = new Thickness(0),
+            ColumnWidth = double.PositiveInfinity,
+            ColumnGap = 0,
+            Background = System.Windows.Media.Brushes.Transparent,
+            Foreground = ExplanationRichTextBox.Foreground,
+            FontFamily = _chineseTranslationFont,
+            FontSize = fontSize,
+            TextAlignment = TextAlignment.Left,
+        };
+        _explanationParagraph = paragraph;
+        _renderedExplanation = text;
+        ApplyExplanationFontSize(fontSize);
+    }
+
     private void AppendTranslationRuns(Paragraph paragraph, string text)
     {
         foreach (var segment in TranslationTypography.Segment(text))
         {
-            paragraph.Inlines.Add(new Run(segment.Text)
-            {
-                FontFamily = segment.UsesChineseFont ? _chineseTranslationFont : _englishTranslationFont,
-            });
+            AppendRun(
+                paragraph,
+                segment.Text,
+                segment.UsesChineseFont ? _chineseTranslationFont : _englishTranslationFont);
         }
+    }
+
+    private void AppendExplanationText(Paragraph paragraph, string text)
+    {
+        AppendRun(paragraph, text, _chineseTranslationFont);
+    }
+
+    private static void AppendRun(
+        Paragraph paragraph,
+        string text,
+        System.Windows.Media.FontFamily fontFamily)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        if (paragraph.Inlines.LastInline is Run lastRun
+            && Equals(lastRun.FontFamily, fontFamily))
+        {
+            lastRun.Text = string.Concat(lastRun.Text, text);
+            return;
+        }
+
+        paragraph.Inlines.Add(new Run(text)
+        {
+            FontFamily = fontFamily,
+        });
+    }
+
+    private void QueueTranslationReveal(string text, bool resetVisibleText)
+    {
+        var needsReset = resetVisibleText
+            || !text.StartsWith(_translationRevealTarget, StringComparison.Ordinal)
+            || _renderedTranslation.Length > text.Length
+            || !text.StartsWith(_renderedTranslation, StringComparison.Ordinal);
+        _translationRevealTarget = text;
+
+        if (needsReset)
+        {
+            _translationRevealTimer.Stop();
+            _completeTranslationAfterReveal = false;
+            _translationParagraph = null;
+            _renderedTranslation = string.Empty;
+
+            var initialEnd = AdvanceRevealIndex(text, 0, StreamingRevealInitialCharacters);
+            SetTranslationText(text[..initialEnd]);
+        }
+
+        EnsureTranslationRevealTimer();
+    }
+
+    private void QueueExplanationReveal(string text, bool resetVisibleText)
+    {
+        var needsReset = resetVisibleText
+            || !text.StartsWith(_explanationRevealTarget, StringComparison.Ordinal)
+            || _renderedExplanation.Length > text.Length
+            || !text.StartsWith(_renderedExplanation, StringComparison.Ordinal);
+        _explanationRevealTarget = text;
+
+        if (needsReset)
+        {
+            _explanationRevealTimer.Stop();
+            _explanationParagraph = null;
+            _renderedExplanation = string.Empty;
+
+            var initialEnd = AdvanceRevealIndex(text, 0, StreamingRevealInitialCharacters);
+            SetExplanationText(text[..initialEnd]);
+        }
+
+        EnsureExplanationRevealTimer();
+    }
+
+    private void TranslationRevealTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_renderedTranslation.Length >= _translationRevealTarget.Length)
+        {
+            FinishTranslationReveal();
+            return;
+        }
+
+        var nextEnd = GetNextRevealEnd(_translationRevealTarget, _renderedTranslation.Length);
+        SetTranslationText(_translationRevealTarget[..nextEnd]);
+        if (nextEnd >= _translationRevealTarget.Length)
+        {
+            FinishTranslationReveal();
+        }
+    }
+
+    private void ExplanationRevealTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_renderedExplanation.Length >= _explanationRevealTarget.Length)
+        {
+            _explanationRevealTimer.Stop();
+            return;
+        }
+
+        var nextEnd = GetNextRevealEnd(_explanationRevealTarget, _renderedExplanation.Length);
+        SetExplanationText(_explanationRevealTarget[..nextEnd]);
+        if (nextEnd >= _explanationRevealTarget.Length)
+        {
+            _explanationRevealTimer.Stop();
+        }
+    }
+
+    private void EnsureTranslationRevealTimer()
+    {
+        if (_renderedTranslation.Length < _translationRevealTarget.Length
+            && !_translationRevealTimer.IsEnabled)
+        {
+            _translationRevealTimer.Start();
+        }
+    }
+
+    private void EnsureExplanationRevealTimer()
+    {
+        if (_renderedExplanation.Length < _explanationRevealTarget.Length
+            && !_explanationRevealTimer.IsEnabled)
+        {
+            _explanationRevealTimer.Start();
+        }
+    }
+
+    private void FinishTranslationReveal()
+    {
+        _translationRevealTimer.Stop();
+        if (_completeTranslationAfterReveal)
+        {
+            CompleteTranslationPresentation();
+        }
+    }
+
+    private void StopTranslationReveal(bool clearTarget)
+    {
+        _translationRevealTimer.Stop();
+        _completeTranslationAfterReveal = false;
+        if (clearTarget)
+        {
+            _translationRevealTarget = string.Empty;
+        }
+    }
+
+    private void StopExplanationReveal(bool clearTarget)
+    {
+        _explanationRevealTimer.Stop();
+        if (clearTarget)
+        {
+            _explanationRevealTarget = string.Empty;
+        }
+    }
+
+    private static int GetNextRevealEnd(string text, int renderedLength)
+    {
+        var remainingCharacters = Math.Max(0, text.Length - renderedLength);
+        var characterBudget = Math.Clamp(
+            (int)Math.Ceiling(remainingCharacters / (double)StreamingRevealTargetFrames),
+            StreamingRevealMinimumCharactersPerFrame,
+            StreamingRevealMaximumCharactersPerFrame);
+        return AdvanceRevealIndex(text, renderedLength, characterBudget);
+    }
+
+    private static int AdvanceRevealIndex(string text, int startIndex, int characterBudget)
+    {
+        var index = Math.Clamp(startIndex, 0, text.Length);
+        var remainingBudget = Math.Max(1, characterBudget);
+        while (index < text.Length && remainingBudget-- > 0)
+        {
+            if (char.IsHighSurrogate(text[index])
+                && index + 1 < text.Length
+                && char.IsLowSurrogate(text[index + 1]))
+            {
+                index += 2;
+            }
+            else
+            {
+                index++;
+            }
+        }
+
+        return index;
     }
 
     private void ShowActionStatus(ActionMessageKind messageKind)
@@ -955,6 +1686,7 @@ internal partial class PopupWindow : Window
     {
         CopySourceButton.ToolTip = Localize("Copy source", "复制原文");
         CopyTranslationButton.ToolTip = Localize("Copy translation", "复制译文");
+        ExplanationCopyButton.ToolTip = Localize("Copy explanation", "复制解释");
     }
 
     private string Localize(string english, string chinese)
@@ -980,6 +1712,13 @@ internal partial class PopupWindow : Window
         {
             return new System.Windows.Media.FontFamily(fallback);
         }
+    }
+
+    private static Geometry CreateFrozenGeometry(string pathData)
+    {
+        var geometry = Geometry.Parse(pathData);
+        geometry.Freeze();
+        return geometry;
     }
 
     private void FontSizeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -1023,6 +1762,34 @@ internal partial class PopupWindow : Window
                 paragraph.LineHeight = lineHeight;
             }
         }
+
+        ApplyExplanationFontSize(fontSize);
+    }
+
+    private void ApplyExplanationFontSize(double fontSize)
+    {
+        if (ExplanationRichTextBox is null)
+        {
+            return;
+        }
+
+        ExplanationRichTextBox.FontFamily = _chineseTranslationFont;
+        ExplanationRichTextBox.FontSize = fontSize;
+        if (ExplanationRichTextBox.Document is not { } document)
+        {
+            return;
+        }
+
+        document.FontFamily = _chineseTranslationFont;
+        document.FontSize = fontSize;
+        var lineHeight = CalculateLineHeight(fontSize);
+        foreach (var block in document.Blocks)
+        {
+            if (block is Paragraph paragraph)
+            {
+                paragraph.LineHeight = lineHeight;
+            }
+        }
     }
 
     private static double CalculateLineHeight(double fontSize)
@@ -1032,6 +1799,7 @@ internal partial class PopupWindow : Window
 
     private void TranslationRichTextBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        HideSelectionExplainButton();
         if (!IsActive)
         {
             Activate();
@@ -1070,6 +1838,8 @@ internal partial class PopupWindow : Window
 
     private void PopupWindow_SizeChanged(object sender, SizeChangedEventArgs e)
     {
+        UpdatePopupSurfaceClip();
+
         if (!IsVisible
             || IsPinned
             || SizeToContent == SizeToContent.Manual
@@ -1079,6 +1849,29 @@ internal partial class PopupWindow : Window
         }
 
         SchedulePositionNearAnchor();
+    }
+
+    private void PopupSurface_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdatePopupSurfaceClip();
+    }
+
+    private void UpdatePopupSurfaceClip()
+    {
+        var width = PopupSurface.ActualWidth;
+        var height = PopupSurface.ActualHeight;
+        if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        var requestedRadius = Math.Max(
+            Math.Max(PopupSurface.CornerRadius.TopLeft, PopupSurface.CornerRadius.TopRight),
+            Math.Max(PopupSurface.CornerRadius.BottomLeft, PopupSurface.CornerRadius.BottomRight));
+        var radius = Math.Min(requestedRadius, Math.Min(width, height) / 2);
+        var clip = new RectangleGeometry(new Rect(0, 0, width, height), radius, radius);
+        clip.Freeze();
+        PopupSurface.Clip = clip;
     }
 
     private void SchedulePositionNearAnchor()
@@ -1145,6 +1938,8 @@ internal partial class PopupWindow : Window
         x = Math.Clamp(x, minimumX, Math.Max(minimumX, screen.WorkingArea.Right - width - screenMargin));
         y = Math.Clamp(y, minimumY, Math.Max(minimumY, screen.WorkingArea.Bottom - height - screenMargin));
 
+        UpdateBubbleTailDirection(windowIsLeftOfAnchor: x < anchorPoint.X);
+
         NativeMethods.SetWindowPos(
             _windowHandle,
             NativeMethods.HwndTopmost,
@@ -1179,4 +1974,8 @@ internal partial class PopupWindow : Window
         string SourceLanguage,
         string TranslatedText,
         string TargetLanguage);
+
+    private readonly record struct ExplanationInvocation(
+        string SubjectText,
+        ExplanationScope Scope);
 }

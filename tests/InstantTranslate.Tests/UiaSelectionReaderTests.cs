@@ -21,6 +21,27 @@ public sealed class UiaSelectionReaderTests
             UiaSelectionReader.ShouldIncludeFocusedElement(hitProcessId, focusedProcessId));
     }
 
+    [Theory]
+    [InlineData(42, 42, 100, 100, true)]
+    [InlineData(42, 42, 100, 0, true)]
+    [InlineData(42, 42, 100, 101, false)]
+    [InlineData(42, 43, 100, 100, false)]
+    public void FocusedDocumentWithoutNativeWindowHandleCanStillBeUsed(
+        int? hitProcessId,
+        int? focusedProcessId,
+        int expectedRootOwner,
+        int focusedRootOwner,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            UiaSelectionReader.ShouldIncludeFocusedElementInTargetWindow(
+                hitProcessId,
+                focusedProcessId,
+                new IntPtr(expectedRootOwner),
+                new IntPtr(focusedRootOwner)));
+    }
+
     [Fact]
     public async Task PhysicalReadsAreBoundedWhenProvidersRemainBlocked()
     {

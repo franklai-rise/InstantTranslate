@@ -831,6 +831,61 @@
                             </StackPanel>
                         </Grid>
 
+                        <Grid Margin="0,17,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="16" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                           Tag="loc:PopupVisualStyle"
+                                           Text="Popup style" />
+                                <ComboBox x:Name="PopupVisualStyleComboBox"
+                                          IsEditable="False"
+                                          SelectedValuePath="Tag"
+                                          SelectionChanged="PopupVisualStyleComboBox_SelectionChanged">
+                                    <ComboBoxItem Content="Minimal" Tag="minimal" />
+                                    <ComboBoxItem Content="Bubble" Tag="bubble" />
+                                    <ComboBoxItem Content="Bubble 2.0" Tag="bubble-v2" />
+                                </ComboBox>
+                            </StackPanel>
+                            <Grid Grid.Column="2"
+                                  Width="112"
+                                  Height="38"
+                                  Margin="0,20,0,0"
+                                  HorizontalAlignment="Right"
+                                  VerticalAlignment="Top">
+                                <Path x:Name="PopupStylePreviewTail"
+                                      Margin="0,13,0,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Top"
+                                      Data="M0,0 L12,6 L0,12 Z"
+                                      Fill="{DynamicResource AppFieldBackgroundBrush}"
+                                      Visibility="Collapsed" />
+                                <Border x:Name="PopupStylePreviewSurface"
+                                        Margin="0,4,0,4"
+                                        Background="{DynamicResource AppFieldBackgroundBrush}"
+                                        BorderBrush="{DynamicResource AppFieldBorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="7">
+                                    <StackPanel Margin="12,0"
+                                                VerticalAlignment="Center"
+                                                Orientation="Horizontal">
+                                        <Ellipse Width="5"
+                                                 Height="5"
+                                                 Margin="0,0,5,0"
+                                                 Fill="{DynamicResource AccentBrush}" />
+                                        <Border Width="38"
+                                                Height="4"
+                                                VerticalAlignment="Center"
+                                                Background="{DynamicResource AppCardBorderBrush}"
+                                                CornerRadius="2" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Grid>
+
                         <Grid Margin="0,18,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />

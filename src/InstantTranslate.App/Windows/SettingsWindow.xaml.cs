@@ -46,6 +46,10 @@ internal partial class SettingsWindow : Window
             ["ChineseTranslationFont"] = ("Chinese translation font", "中文译文字体"),
             ["AccentColor"] = ("Accent color", "强调色"),
             ["CustomColor"] = ("Custom color", "自定义颜色"),
+            ["PopupVisualStyle"] = ("Popup style", "浮窗样式"),
+            ["PopupStyleMinimal"] = ("Minimal", "极简"),
+            ["PopupStyleBubble"] = ("Bubble", "气泡"),
+            ["PopupStyleBubbleV2"] = ("Bubble 2.0", "气泡 2.0"),
             ["DefaultTranslationFontSize"] = ("Default translation size", "默认译文字号"),
             ["TranslationServiceTitle"] = ("Translation service", "翻译服务"),
             ["TranslationServiceDescription"] = ("Your API key is stored only in Windows Credential Manager on this device.", "API Key 仅保存在本机 Windows 凭据管理器中。"),
@@ -113,6 +117,7 @@ internal partial class SettingsWindow : Window
         PersonalGlossaryTextBox.Text = settings.PersonalGlossary;
         SelectTheme(settings.ColorTheme);
         CustomAccentColorTextBox.Text = settings.CustomAccentColor;
+        SelectPopupVisualStyle(settings.PopupVisualStyle);
         DefaultFontSizeSlider.Value = Math.Clamp(settings.DefaultTranslationFontSize, 12, 34);
         SetComboText(
             EnglishTranslationFontComboBox,
@@ -172,6 +177,8 @@ internal partial class SettingsWindow : Window
 
         var providerId = ProviderComboBox.SelectedValue as string ?? "deepseek";
         var colorTheme = ColorThemeComboBox.SelectedValue as string ?? ThemeCatalog.DefaultThemeId;
+        var popupVisualStyle = PopupVisualStyleCatalog.Normalize(
+            PopupVisualStyleComboBox.SelectedValue as string);
         var customAccentColor = CustomAccentColorTextBox.Text.Trim();
         if (colorTheme == ThemeCatalog.CustomThemeId
             && !ThemeCatalog.TryNormalizeHexColor(customAccentColor, out customAccentColor))
@@ -227,6 +234,7 @@ internal partial class SettingsWindow : Window
             PersonalGlossary = PersonalGlossaryTextBox.Text.Trim(),
             ColorTheme = colorTheme,
             CustomAccentColor = customAccentColor,
+            PopupVisualStyle = popupVisualStyle,
             DefaultTranslationFontSize = Math.Round(DefaultFontSizeSlider.Value, 1),
             UiLanguage = _uiLanguage,
             EnglishTranslationFontFamily = TranslationFontCatalog.NormalizeEnglish(ReadComboText(EnglishTranslationFontComboBox)),
@@ -309,6 +317,9 @@ internal partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(
             ClearTranslationMemoryButton,
             L("ClearTranslationMemory"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            PopupVisualStyleComboBox,
+            L("PopupVisualStyle"));
 
         SelectionDelayTextBox.ToolTip = L("SelectionDelayTooltip");
         MaximumSelectionTextBox.ToolTip = L("MaximumSelectionTooltip");
@@ -339,6 +350,9 @@ internal partial class SettingsWindow : Window
         SetComboItemContent(ColorThemeComboBox, "sunset", _uiLanguage == "zh-CN" ? "暖橙色" : "Warm orange");
         SetComboItemContent(ColorThemeComboBox, "rose", _uiLanguage == "zh-CN" ? "玫瑰红" : "Rose");
         SetComboItemContent(ColorThemeComboBox, "custom", _uiLanguage == "zh-CN" ? "自定义" : "Custom");
+        SetComboItemContent(PopupVisualStyleComboBox, "minimal", L("PopupStyleMinimal"));
+        SetComboItemContent(PopupVisualStyleComboBox, "bubble", L("PopupStyleBubble"));
+        SetComboItemContent(PopupVisualStyleComboBox, "bubble-v2", L("PopupStyleBubbleV2"));
 
         SetComboItemContent(ProviderComboBox, "deepseek", "DeepSeek API");
         SetComboItemContent(ProviderComboBox, "mock", _uiLanguage == "zh-CN" ? "Mock · 离线测试" : "Mock · offline test");
@@ -502,11 +516,34 @@ internal partial class SettingsWindow : Window
         ColorThemeComboBox.SelectedIndex = 0;
     }
 
+    private void SelectPopupVisualStyle(string popupVisualStyle)
+    {
+        var normalizedStyle = PopupVisualStyleCatalog.Normalize(popupVisualStyle);
+        foreach (var item in PopupVisualStyleComboBox.Items.OfType<System.Windows.Controls.ComboBoxItem>())
+        {
+            if (string.Equals(item.Tag as string, normalizedStyle, StringComparison.OrdinalIgnoreCase))
+            {
+                PopupVisualStyleComboBox.SelectedItem = item;
+                return;
+            }
+        }
+
+        PopupVisualStyleComboBox.SelectedIndex = 0;
+    }
+
     private void ColorThemeComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (IsInitialized)
         {
             UpdateThemePreview();
+        }
+    }
+
+    private void PopupVisualStyleComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (IsInitialized)
+        {
+            UpdatePopupStylePreview();
         }
     }
 
@@ -524,6 +561,45 @@ internal partial class SettingsWindow : Window
         CustomAccentColorTextBox.IsEnabled = themeId == ThemeCatalog.CustomThemeId;
         var palette = ThemeCatalog.Resolve(themeId, CustomAccentColorTextBox.Text);
         ThemePreviewBorder.Background = ThemeManager.CreateBrush(palette.Accent);
+        UpdatePopupStylePreview();
+    }
+
+    private void UpdatePopupStylePreview()
+    {
+        if (PopupStylePreviewSurface is null || PopupStylePreviewTail is null)
+        {
+            return;
+        }
+
+        var popupVisualStyle = PopupVisualStyleCatalog.Normalize(
+            PopupVisualStyleComboBox.SelectedValue as string);
+        var isBubble = PopupVisualStyleCatalog.IsBubble(popupVisualStyle);
+        var isBubbleV2 = PopupVisualStyleCatalog.IsBubbleV2(popupVisualStyle);
+        var themeId = ColorThemeComboBox.SelectedValue as string ?? ThemeCatalog.DefaultThemeId;
+        var palette = ThemeCatalog.Resolve(themeId, CustomAccentColorTextBox.Text);
+        var tailColor = isBubbleV2
+            ? "#F2F4FF"
+            : isBubble
+                ? "#EEF7FF"
+                : palette.PopupBackground;
+
+        PopupStylePreviewSurface.Margin = isBubble
+            ? new Thickness(isBubbleV2 ? 14 : 12, 2, 0, 2)
+            : new Thickness(0, 4, 0, 4);
+        PopupStylePreviewSurface.CornerRadius = new CornerRadius(isBubbleV2 ? 22 : isBubble ? 18 : 7);
+        PopupStylePreviewSurface.BorderThickness = new Thickness(isBubble ? 0 : 1);
+        PopupStylePreviewSurface.Background = ThemeManager.CreatePopupPreviewSurfaceBrush(
+            popupVisualStyle,
+            palette);
+        PopupStylePreviewSurface.BorderBrush = ThemeManager.CreateBrush(
+            isBubbleV2 ? "#FFFFFF" : isBubble ? "#C9D9EA" : palette.PopupBorder);
+        PopupStylePreviewTail.Data = System.Windows.Media.Geometry.Parse(isBubbleV2
+            ? "M0,6 C3,4 6,1.5 12,0 C10,3.8 10,8.2 12,12 C6,10.5 3,8 0,6 Z"
+            : "M0,0 L12,6 L0,12 Z");
+        PopupStylePreviewTail.Fill = ThemeManager.CreateBrush(tailColor);
+        PopupStylePreviewTail.Stroke = ThemeManager.CreateBrush(isBubbleV2 ? "#FFFFFF" : "#00FFFFFF");
+        PopupStylePreviewTail.StrokeThickness = isBubbleV2 ? 0.8 : 0;
+        PopupStylePreviewTail.Visibility = isBubble ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void UpdateProviderFields()
