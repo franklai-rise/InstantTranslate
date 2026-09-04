@@ -18,9 +18,9 @@ internal sealed record TranslationExample(string SourceText, string TargetText);
 internal sealed record TranslationChunk(string TextDelta, bool IsFinal = false);
 
 /// <summary>
-/// Context sent to the AI when the user asks for an explanation. The source and
-/// full translation are reference-only; <see cref="SubjectText"/> is the text
-/// that must be explained.
+/// Context sent to the AI when the user asks for an explanation or code
+/// analysis. The source and full translation are reference-only; <see
+/// cref="SubjectText"/> is the text that must be explained or analyzed.
 /// </summary>
 internal sealed record ExplanationRequest(
     string SubjectText,
@@ -34,7 +34,34 @@ internal enum ExplanationScope
 {
     SourceText,
     TranslationSelection,
+    CodeAnalysis,
 }
+
+internal sealed record ConversationTurn(string Role, string Content);
+
+internal sealed record QuestionAnswerRequest(
+    string Question,
+    string SourceText,
+    string TranslationText,
+    string? ExplanationText,
+    string SourceLanguage,
+    string TargetLanguage,
+    string UiLanguage,
+    QuestionContextKind ContextKind,
+    IReadOnlyList<ConversationTurn> History);
+
+internal enum QuestionContextKind
+{
+    Translation,
+    Explanation,
+    GeneralChat,
+}
+
+internal sealed record SummaryRequest(
+    string Records,
+    string UiLanguage,
+    string RangeLabel,
+    bool IsConsolidation = false);
 
 internal interface IStreamingTranslationProvider
 {
@@ -52,11 +79,29 @@ internal interface IStreamingExplanationProvider
         CancellationToken cancellationToken = default);
 }
 
+internal interface IStreamingQuestionAnswerProvider
+{
+    IAsyncEnumerable<TranslationChunk> AnswerAsync(
+        QuestionAnswerRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+internal interface IStreamingSummaryProvider
+{
+    IAsyncEnumerable<TranslationChunk> SummarizeAsync(
+        SummaryRequest request,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// Contract reserved for a future OpenAI-compatible SSE/chat-completions provider.
 /// Implementations must yield text deltas as they arrive and honor cancellation.
 /// </summary>
-internal interface IOpenAiCompatibleStreamingProvider : IStreamingTranslationProvider, IStreamingExplanationProvider
+internal interface IOpenAiCompatibleStreamingProvider :
+    IStreamingTranslationProvider,
+    IStreamingExplanationProvider,
+    IStreamingQuestionAnswerProvider,
+    IStreamingSummaryProvider
 {
     OpenAiCompatibleProviderOptions Options { get; }
 }
@@ -70,6 +115,10 @@ internal interface ITranslationProviderFactory
     IStreamingTranslationProvider Create(AppSettings settings);
 
     IStreamingExplanationProvider CreateExplanationProvider(AppSettings settings);
+
+    IStreamingQuestionAnswerProvider CreateQuestionAnswerProvider(AppSettings settings);
+
+    IStreamingSummaryProvider CreateSummaryProvider(AppSettings settings);
 }
 
 internal sealed record OpenAiCompatibleProviderOptions(

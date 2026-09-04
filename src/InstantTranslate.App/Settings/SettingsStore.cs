@@ -156,6 +156,9 @@ internal sealed class SettingsStore
                 ? defaults.CustomAccentColor
                 : value.CustomAccentColor.Trim(),
             PopupVisualStyle = PopupVisualStyleCatalog.Normalize(value.PopupVisualStyle),
+            HighlightPalette = HighlightPaletteCatalog.Normalize(value.HighlightPalette),
+            AiHistoryDirectory = value.AiHistoryDirectory?.Trim() ?? string.Empty,
+            AiSummaryRange = SummaryRangeCatalog.Normalize(value.AiSummaryRange),
             SelectionDelayMilliseconds = Math.Clamp(value.SelectionDelayMilliseconds, 0, 2000),
             MaximumSelectionCharacters = Math.Clamp(value.MaximumSelectionCharacters, 1, 20_000),
             DefaultTranslationFontSize = double.IsFinite(value.DefaultTranslationFontSize)

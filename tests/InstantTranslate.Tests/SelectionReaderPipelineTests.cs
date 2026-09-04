@@ -126,8 +126,40 @@ public sealed class SelectionReaderPipelineTests
         Assert.Equal(2, primary.CallCount);
         Assert.Equal(1, nativeFallback.CallCount);
         Assert.Single(delays);
-        Assert.Equal(TimeSpan.FromMilliseconds(85), delays[0]);
+        Assert.Equal(TimeSpan.FromMilliseconds(140), delays[0]);
         Assert.Equal(0, clipboardFallback.CallCount);
+    }
+
+    [Fact]
+    public async Task UsesSecondStabilizationRetryForLatePdfAccessibilitySelection()
+    {
+        var primary = new SequenceSelectionReader(null, null, "PDF selection");
+        var delays = new List<TimeSpan>();
+        var pipeline = new SelectionReaderPipeline(
+            primary,
+            new StubSelectionReader(null),
+            requiresStabilizedRead: _ => true,
+            delayAsync: (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            });
+
+        var result = await pipeline.TryReadSelectedTextAsync(
+            new ScreenPoint(10, 20),
+            CancellationToken.None);
+
+        Assert.Equal("PDF selection", result);
+        Assert.Equal(3, primary.CallCount);
+        Assert.Equal(
+            [TimeSpan.FromMilliseconds(140), TimeSpan.FromMilliseconds(360)],
+            delays);
+    }
+
+    [Fact]
+    public void UiaAncestorSearchSupportsDeepChromiumPdfTrees()
+    {
+        Assert.True(UiaSelectionReader.MaximumAncestorDepth >= 32);
     }
 
     [Fact]

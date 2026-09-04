@@ -89,7 +89,11 @@ internal sealed class ProviderCircuitBreaker
 
 internal sealed class CircuitBreakingTranslationProvider(
     IStreamingTranslationProvider inner,
-    ProviderCircuitBreaker circuitBreaker) : IStreamingTranslationProvider, IStreamingExplanationProvider
+    ProviderCircuitBreaker circuitBreaker) :
+    IStreamingTranslationProvider,
+    IStreamingExplanationProvider,
+    IStreamingQuestionAnswerProvider,
+    IStreamingSummaryProvider
 {
     public string Id => inner.Id;
 
@@ -118,6 +122,44 @@ internal sealed class CircuitBreakingTranslationProvider(
 
         await foreach (var chunk in StreamWithCircuitBreakerAsync(
                            explanationProvider.ExplainAsync(request, cancellationToken),
+                           cancellationToken))
+        {
+            yield return chunk;
+        }
+    }
+
+    public async IAsyncEnumerable<TranslationChunk> AnswerAsync(
+        QuestionAnswerRequest request,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (inner is not IStreamingQuestionAnswerProvider questionAnswerProvider)
+        {
+            throw new TranslationProviderException(
+                "当前 Provider 不支持 AI 问答。",
+                TranslationFailureKind.Configuration);
+        }
+
+        await foreach (var chunk in StreamWithCircuitBreakerAsync(
+                           questionAnswerProvider.AnswerAsync(request, cancellationToken),
+                           cancellationToken))
+        {
+            yield return chunk;
+        }
+    }
+
+    public async IAsyncEnumerable<TranslationChunk> SummarizeAsync(
+        SummaryRequest request,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (inner is not IStreamingSummaryProvider summaryProvider)
+        {
+            throw new TranslationProviderException(
+                "当前 Provider 不支持 AI 总结。",
+                TranslationFailureKind.Configuration);
+        }
+
+        await foreach (var chunk in StreamWithCircuitBreakerAsync(
+                           summaryProvider.SummarizeAsync(request, cancellationToken),
                            cancellationToken))
         {
             yield return chunk;

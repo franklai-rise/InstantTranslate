@@ -29,6 +29,12 @@
         <SolidColorBrush x:Key="PopupTextBrush" Color="#1D1D1F" />
         <SolidColorBrush x:Key="PopupMutedBrush" Color="#6E6E73" />
         <SolidColorBrush x:Key="PopupBadgeBrush" Color="#2563EB" />
+        <SolidColorBrush x:Key="ContentHighlightPrimaryBrush" Color="#1D4ED8" />
+        <SolidColorBrush x:Key="ContentHighlightPrimaryBackgroundBrush" Color="#E8F0FF" />
+        <SolidColorBrush x:Key="ContentHighlightSecondaryBrush" Color="#7C3AED" />
+        <SolidColorBrush x:Key="ContentHighlightSecondaryBackgroundBrush" Color="#F1EAFE" />
+        <SolidColorBrush x:Key="ContentHighlightTertiaryBrush" Color="#A16207" />
+        <SolidColorBrush x:Key="ContentHighlightTertiaryBackgroundBrush" Color="#FFF3D8" />
         <SolidColorBrush x:Key="PopupHighlightBrush" Color="#00FFFFFF" />
         <SolidColorBrush x:Key="PopupTailBrush" Color="#F7F7F8" />
         <SolidColorBrush x:Key="PopupTailStrokeBrush" Color="#00FFFFFF" />
@@ -45,5 +51,8 @@
                                  Opacity="0" />
         <SolidColorBrush x:Key="ExplanationSurfaceBrush" Color="#EEF0F3" />
         <SolidColorBrush x:Key="ExplanationHeaderBrush" Color="#E4E7EC" />
+        <SolidColorBrush x:Key="QuestionAnswerSurfaceBrush" Color="#F7F9FC" />
+        <SolidColorBrush x:Key="QuestionAnswerHeaderBrush" Color="#EEF2F8" />
+        <SolidColorBrush x:Key="QuestionInputBrush" Color="#FFFFFF" />
     </Application.Resources>
 </Application>

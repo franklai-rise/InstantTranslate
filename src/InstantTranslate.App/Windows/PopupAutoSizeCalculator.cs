@@ -7,12 +7,14 @@ internal readonly record struct PopupAutoSize(double Width, double Height);
 internal static class PopupAutoSizeCalculator
 {
     internal const double MinimumWidth = 380;
-    internal const double MinimumHeight = 128;
+    internal const double MinimumHeight = 192;
     internal const double PreferredMaximumWidth = 820;
     internal const double PreferredMaximumHeight = 600;
 
     private const double HorizontalChrome = 32;
-    private const double VerticalChrome = 76;
+    // Includes the single-row external controls, surface padding, and the
+    // compact Q&A composer shown after translation.
+    private const double VerticalChrome = 140;
 
     internal static PopupAutoSize Calculate(
         string? text,

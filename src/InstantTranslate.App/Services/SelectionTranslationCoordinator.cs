@@ -20,7 +20,10 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     private static readonly TimeSpan ExplanationTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan ExplanationFirstContentTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ExplanationStreamIdleTimeout = TimeSpan.FromSeconds(15);
-    private const int PromptVersion = 3;
+    private static readonly TimeSpan QuestionAnswerTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan QuestionAnswerFirstContentTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan QuestionAnswerStreamIdleTimeout = TimeSpan.FromSeconds(15);
+    private const int PromptVersion = 5;
 
     private readonly GlobalMouseHook _mouseHook;
     private readonly ISelectionReader _selectionReader;
@@ -30,6 +33,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     private readonly Func<AppSettings> _getSettings;
     private readonly TranslationPerformanceMonitor _performanceMonitor;
     private readonly TranslationMemoryStore _translationMemoryStore;
+    private readonly AiHistoryStore _aiHistoryStore;
     private readonly RequestVersionGate _requestGate = new();
     private readonly TranslationMemoryCache _translationCache = new();
     private readonly TranslationInFlightRegistry _inFlightTranslations = new();
@@ -37,6 +41,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     private readonly SemaphoreSlim _explanationConcurrency = new(1, 1);
     private readonly object _retranslationSync = new();
     private readonly ExplanationRequestGate _explanationGate = new();
+    private readonly QuestionAnswerRequestGate _questionAnswerGate = new();
+    private readonly SemaphoreSlim _questionAnswerConcurrency = new(2, 2);
     private readonly Dictionary<long, CancellationTokenSource> _retranslations = new();
     private readonly Dictionary<long, CancellationTokenSource> _detachedSelections = new();
     private readonly HashSet<long> _runningSelections = new();
@@ -50,7 +56,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         Dispatcher dispatcher,
         Func<AppSettings> getSettings,
         TranslationPerformanceMonitor? performanceMonitor = null,
-        TranslationMemoryStore? translationMemoryStore = null)
+        TranslationMemoryStore? translationMemoryStore = null,
+        AiHistoryStore? aiHistoryStore = null)
     {
         _mouseHook = mouseHook;
         _selectionReader = selectionReader;
@@ -60,6 +67,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         _getSettings = getSettings;
         _performanceMonitor = performanceMonitor ?? new TranslationPerformanceMonitor();
         _translationMemoryStore = translationMemoryStore ?? new TranslationMemoryStore();
+        _aiHistoryStore = aiHistoryStore ?? new AiHistoryStore();
 
         _mouseHook.MousePressed += OnMousePressed;
         _mouseHook.SelectionGestureCompleted += OnSelectionGestureCompleted;
@@ -69,6 +77,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         _popupPresenter.TranslationCorrectionRequested += OnTranslationCorrectionRequested;
         _popupPresenter.ExplanationRequested += OnExplanationRequested;
         _popupPresenter.ExplanationDismissed += OnExplanationDismissed;
+        _popupPresenter.QuestionAnswerRequested += OnQuestionAnswerRequested;
+        _popupPresenter.QuestionAnswerCancelled += OnQuestionAnswerCancelled;
     }
 
     public event Action<string>? TranslationFailed;
@@ -78,7 +88,10 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
     /// custom-rendered applications such as WeChat that expose no selectable text
     /// through UI Automation and ignore WM_COPY.
     /// </summary>
-    public void TranslateText(string? text, ScreenPoint anchorPoint)
+    public void TranslateText(
+        string? text,
+        ScreenPoint anchorPoint,
+        TranslationTrigger trigger = TranslationTrigger.Clipboard)
     {
         var normalizedText = TextNormalizer.Normalize(text);
         if (_disposed || string.IsNullOrWhiteSpace(normalizedText))
@@ -96,7 +109,7 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
 
                 var lease = _requestGate.BeginRequest();
                 TrackSelection(lease.Version);
-                _ = ProcessExplicitTextAsync(normalizedText, anchorPoint, _getSettings(), lease);
+                _ = ProcessExplicitTextAsync(normalizedText, anchorPoint, _getSettings(), lease, trigger);
             },
             DispatcherPriority.Send);
     }
@@ -246,10 +259,11 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         string text,
         ScreenPoint anchorPoint,
         AppSettings settings,
-        RequestLease lease)
+        RequestLease lease,
+        TranslationTrigger trigger)
     {
         var performance = _performanceMonitor.Begin(
-            TranslationTrigger.Clipboard,
+            trigger,
             settings.ProviderId);
         var outcome = TranslationOutcome.Cancelled;
         try
@@ -509,8 +523,57 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             if (explanation.Length == 0)
             {
                 throw new TranslationProviderException(
-                    "DeepSeek 未返回可用的解释内容。",
+                    request.Scope == ExplanationScope.CodeAnalysis
+                        ? "DeepSeek 未返回可用的代码分析内容。"
+                        : "DeepSeek 未返回可用的解释内容。",
                     TranslationFailureKind.Server);
+            }
+
+            if (IsCurrentExplanation(request.RequestId, operation))
+            {
+                await _dispatcher.InvokeAsync(
+                    () =>
+                    {
+                        if (IsCurrentExplanation(request.RequestId, operation))
+                        {
+                            _popupPresenter.CompleteExplanation(request.RequestId);
+                        }
+                    },
+                    DispatcherPriority.Normal,
+                    timeout.Token);
+
+                try
+                {
+                    var historyResult = await _aiHistoryStore.AppendExplanationAsync(
+                            settings,
+                            new AiHistoryContext(
+                                request.HistorySessionId,
+                                request.HistoryCreatedAt,
+                                request.SourceText,
+                                request.TranslationText,
+                                request.SourceLanguage,
+                                request.TargetLanguage),
+                            request.SubjectText,
+                            request.Scope,
+                            HighlightMarkup.ToPlainText(explanation.ToString()),
+                            DateTimeOffset.Now,
+                            timeout.Token)
+                        .ConfigureAwait(false);
+                    if (historyResult.ErrorCode is not null)
+                    {
+                        Debug.WriteLine($"InstantTranslate AI history explanation save skipped: {historyResult.ErrorCode}");
+                    }
+                }
+                catch (Exception exception) when (exception is OperationCanceledException
+                                                  or IOException
+                                                  or UnauthorizedAccessException
+                                                  or ArgumentException
+                                                  or NotSupportedException)
+                {
+                    // Archiving is optional. A disk or cancellation failure must
+                    // never turn a successfully displayed explanation into an error.
+                    Debug.WriteLine($"InstantTranslate AI history explanation save skipped: {exception.GetType().Name}");
+                }
             }
         }
         catch (OperationCanceledException) when (operation.Cancellation.IsCancellationRequested)
@@ -530,8 +593,12 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         {
             Debug.WriteLine($"InstantTranslate explanation ended unexpectedly: {exception}");
             var message = timeout.IsCancellationRequested
-                ? Localize(settings, "AI explanation timed out. Try again.", "AI 解释超时，请重试。")
-                : Localize(settings, "AI explanation ended unexpectedly. Try again.", "AI 解释意外中断，请重试。");
+                ? request.Scope == ExplanationScope.CodeAnalysis
+                    ? Localize(settings, "Code analysis timed out. Try again.", "代码分析超时，请重试。")
+                    : Localize(settings, "AI explanation timed out. Try again.", "AI 解释超时，请重试。")
+                : request.Scope == ExplanationScope.CodeAnalysis
+                    ? Localize(settings, "Code analysis ended unexpectedly. Try again.", "代码分析意外中断，请重试。")
+                    : Localize(settings, "AI explanation ended unexpectedly. Try again.", "AI 解释意外中断，请重试。");
             await FailExplanationIfCurrentAsync(request.RequestId, operation, message).ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -540,7 +607,9 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             await FailExplanationIfCurrentAsync(
                 request.RequestId,
                 operation,
-                Localize(settings, "AI explanation failed. Check the network and try again.", "AI 解释失败，请检查网络后重试。")).ConfigureAwait(false);
+                request.Scope == ExplanationScope.CodeAnalysis
+                    ? Localize(settings, "Code analysis failed. Check the network and try again.", "代码分析失败，请检查网络后重试。")
+                    : Localize(settings, "AI explanation failed. Check the network and try again.", "AI 解释失败，请检查网络后重试。")).ConfigureAwait(false);
         }
         finally
         {
@@ -830,6 +899,254 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
     }
 
+    private void OnQuestionAnswerRequested(PopupQuestionAnswerRequest request)
+    {
+        if (_disposed
+            || request.SessionId == Guid.Empty
+            || string.IsNullOrWhiteSpace(request.Question)
+            || (request.ContextKind != QuestionContextKind.GeneralChat
+                && (string.IsNullOrWhiteSpace(request.SourceText)
+                    || string.IsNullOrWhiteSpace(request.TranslationText))))
+        {
+            return;
+        }
+
+        QuestionAnswerRequestLease operation;
+        try
+        {
+            operation = _questionAnswerGate.Begin(request.SessionId);
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        _ = ProcessQuestionAnswerAsync(request, _getSettings(), operation);
+    }
+
+    private void OnQuestionAnswerCancelled(Guid sessionId)
+    {
+        _questionAnswerGate.Cancel(sessionId);
+    }
+
+    private async Task ProcessQuestionAnswerAsync(
+        PopupQuestionAnswerRequest request,
+        AppSettings settings,
+        QuestionAnswerRequestLease operation)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(operation.Cancellation.Token);
+        timeout.CancelAfter(QuestionAnswerTimeout);
+        var enteredConcurrencySlot = false;
+        var answer = new StringBuilder();
+        var updateThrottle = new StreamingUpdateThrottle();
+
+        try
+        {
+            await _questionAnswerConcurrency.WaitAsync(timeout.Token).ConfigureAwait(false);
+            enteredConcurrencySlot = true;
+            if (!IsCurrentQuestionAnswer(operation))
+            {
+                return;
+            }
+
+            var providerSettings = request.ContextKind == QuestionContextKind.GeneralChat
+                ? settings with { ProviderId = "deepseek" }
+                : settings;
+            var provider = _translationProviderFactory.CreateQuestionAnswerProvider(providerSettings);
+            var providerRequest = new QuestionAnswerRequest(
+                request.Question,
+                request.SourceText,
+                request.TranslationText,
+                request.ExplanationText,
+                request.SourceLanguage,
+                request.TargetLanguage,
+                request.UiLanguage,
+                request.ContextKind,
+                request.History);
+            await using var enumerator = provider
+                .AnswerAsync(providerRequest, timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            var receivedContent = false;
+            while (await MoveNextWithQuestionAnswerStageTimeoutAsync(
+                       enumerator,
+                       receivedContent,
+                       timeout).ConfigureAwait(false))
+            {
+                if (!IsCurrentQuestionAnswer(operation))
+                {
+                    return;
+                }
+
+                var chunk = enumerator.Current;
+                answer.Append(chunk.TextDelta);
+                if (!string.IsNullOrEmpty(chunk.TextDelta))
+                {
+                    receivedContent = true;
+                }
+
+                if (!updateThrottle.ShouldPublish(answer.Length, chunk.IsFinal))
+                {
+                    continue;
+                }
+
+                await ShowQuestionAnswerIfCurrentAsync(
+                    operation,
+                    answer.ToString(),
+                    timeout.Token).ConfigureAwait(false);
+            }
+
+            if (updateThrottle.HasPendingUpdate(answer.Length))
+            {
+                await ShowQuestionAnswerIfCurrentAsync(
+                    operation,
+                    answer.ToString(),
+                    timeout.Token).ConfigureAwait(false);
+            }
+
+            if (answer.Length == 0)
+            {
+                throw new TranslationProviderException(
+                    "DeepSeek 未返回可用的问答内容。",
+                    TranslationFailureKind.Server);
+            }
+
+            if (!IsCurrentQuestionAnswer(operation))
+            {
+                return;
+            }
+
+            var finalAnswer = answer.ToString();
+            await _dispatcher.InvokeAsync(
+                () =>
+                {
+                    if (IsCurrentQuestionAnswer(operation))
+                    {
+                        _popupPresenter.CompleteQuestionAnswer(request.SessionId, finalAnswer);
+                    }
+                },
+                DispatcherPriority.Normal,
+                timeout.Token);
+
+            if (request.ContextKind != QuestionContextKind.GeneralChat)
+            {
+                try
+                {
+                    var historyResult = await _aiHistoryStore.AppendQuestionAnswerAsync(
+                            settings,
+                            new AiHistoryContext(
+                                request.SessionId,
+                                request.HistoryCreatedAt,
+                                request.SourceText,
+                                request.TranslationText,
+                                request.SourceLanguage,
+                                request.TargetLanguage),
+                            request.Question,
+                            HighlightMarkup.ToPlainText(finalAnswer),
+                            request.ContextKind,
+                            DateTimeOffset.Now,
+                            timeout.Token)
+                        .ConfigureAwait(false);
+                    if (historyResult.ErrorCode is not null)
+                    {
+                        Debug.WriteLine($"InstantTranslate AI history Q&A save skipped: {historyResult.ErrorCode}");
+                    }
+                }
+                catch (Exception exception) when (exception is OperationCanceledException
+                                                  or IOException
+                                                  or UnauthorizedAccessException
+                                                  or ArgumentException
+                                                  or NotSupportedException)
+                {
+                    // Optional history is isolated from the live answer path.
+                    Debug.WriteLine($"InstantTranslate AI history Q&A save skipped: {exception.GetType().Name}");
+                }
+            }
+        }
+        catch (OperationCanceledException) when (operation.Cancellation.IsCancellationRequested)
+        {
+        }
+        catch (TranslationProviderException exception)
+        {
+            Debug.WriteLine($"InstantTranslate question-answer provider failed: {exception}");
+            await FailQuestionAnswerIfCurrentAsync(
+                request.SessionId,
+                operation,
+                UiLanguageCatalog.LocalizeProviderError(settings.UiLanguage, exception.Message))
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception)
+        {
+            Debug.WriteLine($"InstantTranslate question-answer ended unexpectedly: {exception}");
+            await FailQuestionAnswerIfCurrentAsync(
+                request.SessionId,
+                operation,
+                Localize(settings, "AI answer timed out. Try again.", "AI 回答超时，请重试。"))
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"InstantTranslate question-answer pipeline failed: {exception}");
+            await FailQuestionAnswerIfCurrentAsync(
+                request.SessionId,
+                operation,
+                Localize(settings, "AI answer failed. Check the network and try again.", "AI 回答失败，请检查网络后重试。"))
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            if (enteredConcurrencySlot)
+            {
+                _questionAnswerConcurrency.Release();
+            }
+
+            _questionAnswerGate.Complete(operation);
+            operation.Cancellation.Dispose();
+        }
+    }
+
+    private async Task ShowQuestionAnswerIfCurrentAsync(
+        QuestionAnswerRequestLease operation,
+        string answer,
+        CancellationToken cancellationToken)
+    {
+        if (!IsCurrentQuestionAnswer(operation))
+        {
+            return;
+        }
+
+        await _dispatcher.InvokeAsync(
+            () =>
+            {
+                if (IsCurrentQuestionAnswer(operation))
+                {
+                    _popupPresenter.ShowQuestionAnswer(operation.SessionId, answer);
+                }
+            },
+            DispatcherPriority.Normal,
+            cancellationToken);
+    }
+
+    private async Task FailQuestionAnswerIfCurrentAsync(
+        Guid sessionId,
+        QuestionAnswerRequestLease operation,
+        string message)
+    {
+        if (!IsCurrentQuestionAnswer(operation))
+        {
+            return;
+        }
+
+        await _dispatcher.InvokeAsync(
+            () =>
+            {
+                if (IsCurrentQuestionAnswer(operation))
+                {
+                    _popupPresenter.FailQuestionAnswer(sessionId, message);
+                }
+            },
+            DispatcherPriority.Send);
+    }
+
     private async Task<string?> StreamTranslationAsync(
         long requestId,
         string sourceText,
@@ -924,8 +1241,14 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             if (translation.Length > 0)
             {
                 var completedTranslation = translation.ToString();
-                _translationCache.Set(cacheKey, completedTranslation);
-                return completedTranslation;
+                if (!string.IsNullOrWhiteSpace(HighlightMarkup.ToPlainText(completedTranslation)))
+                {
+                    // The in-memory cache keeps display metadata so cache hits
+                    // retain their emphasis. Popup state, copy, history, and
+                    // saved translation memory always use the parsed plain text.
+                    _translationCache.Set(cacheKey, completedTranslation);
+                    return completedTranslation;
+                }
             }
 
             return null;
@@ -1000,6 +1323,33 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                 receivedContent
                     ? "DeepSeek 解释流停顿超过 15 秒，已取消。"
                     : "DeepSeek 在 15 秒内未返回首段解释，请检查网络后重试。",
+                exception,
+                TranslationFailureKind.Timeout);
+        }
+    }
+
+    private static async Task<bool> MoveNextWithQuestionAnswerStageTimeoutAsync(
+        IAsyncEnumerator<TranslationChunk> enumerator,
+        bool receivedContent,
+        CancellationTokenSource requestTimeout)
+    {
+        var stageTimeout = receivedContent
+            ? QuestionAnswerStreamIdleTimeout
+            : QuestionAnswerFirstContentTimeout;
+        try
+        {
+            return await enumerator.MoveNextAsync()
+                .AsTask()
+                .WaitAsync(stageTimeout, requestTimeout.Token)
+                .ConfigureAwait(false);
+        }
+        catch (TimeoutException exception)
+        {
+            requestTimeout.Cancel();
+            throw new TranslationProviderException(
+                receivedContent
+                    ? "DeepSeek 问答流停顿超过 15 秒，已取消。"
+                    : "DeepSeek 在 15 秒内未返回首段回答，请检查网络后重试。",
                 exception,
                 TranslationFailureKind.Timeout);
         }
@@ -1213,6 +1563,11 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                && _explanationGate.IsCurrent(operation);
     }
 
+    private bool IsCurrentQuestionAnswer(QuestionAnswerRequestLease operation)
+    {
+        return !_disposed && _questionAnswerGate.IsCurrent(operation);
+    }
+
     private void CancelExplanation(long requestId)
     {
         _explanationGate.Cancel(requestId);
@@ -1252,6 +1607,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         _popupPresenter.TranslationCorrectionRequested -= OnTranslationCorrectionRequested;
         _popupPresenter.ExplanationRequested -= OnExplanationRequested;
         _popupPresenter.ExplanationDismissed -= OnExplanationDismissed;
+        _popupPresenter.QuestionAnswerRequested -= OnQuestionAnswerRequested;
+        _popupPresenter.QuestionAnswerCancelled -= OnQuestionAnswerCancelled;
         _requestGate.Dispose();
         _translationCache.Clear();
 
@@ -1276,5 +1633,6 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
         }
 
         _explanationGate.Dispose();
+        _questionAnswerGate.Dispose();
     }
 }

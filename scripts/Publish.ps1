@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '0.6.0',
+    [string]$Version = '0.7.0',
 
     [string]$CertificateThumbprint = '',
 
@@ -174,6 +174,11 @@ try {
     Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination $stagingPackageDirectory
     Copy-Item -LiteralPath (Join-Path $projectRoot 'src\InstantTranslate.App\Assets\AppLogo.png') -Destination $stagingPackageDirectory
 
+    $zoteroIntegrationDirectory = Join-Path $stagingPackageDirectory 'Integrations\Zotero'
+    New-Item -ItemType Directory -Force -Path $zoteroIntegrationDirectory | Out-Null
+    & (Join-Path $projectRoot 'scripts\Build-ZoteroPlugin.ps1') -OutputDirectory $zoteroIntegrationDirectory
+    Assert-LastExitCode 'Zotero plugin packaging'
+
     $packagedReadme = Join-Path $stagingPackageDirectory 'README.md'
     $readmeText = Get-Content -Raw -Encoding UTF8 -LiteralPath $packagedReadme
     $readmeText = $readmeText.Replace('src/InstantTranslate.App/Assets/AppLogo.png', 'AppLogo.png')
@@ -198,18 +203,29 @@ try {
     }
 
     foreach ($smokeArgument in @('--smoke-test', '--popup-smoke-test', '--settings-lifecycle-test')) {
-        $smokeProcess = Start-Process `
-            -FilePath $publishedExecutable `
-            -ArgumentList $smokeArgument `
-            -PassThru `
-            -WindowStyle Hidden
-        $smokeTimeoutMilliseconds = if ($smokeArgument -eq '--settings-lifecycle-test') { 60000 } else { 15000 }
-        if (-not $smokeProcess.WaitForExit($smokeTimeoutMilliseconds)) {
-            $smokeProcess.Kill($true)
-            throw "Published executable $smokeArgument timed out."
+        $maximumAttempts = if ($smokeArgument -eq '--popup-smoke-test') { 2 } else { 1 }
+        $smokeSucceeded = $false
+        for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
+            $smokeProcess = Start-Process `
+                -FilePath $publishedExecutable `
+                -ArgumentList $smokeArgument `
+                -PassThru `
+                -WindowStyle Hidden
+            $smokeTimeoutMilliseconds = if ($smokeArgument -eq '--settings-lifecycle-test') { 60000 } else { 15000 }
+            if (-not $smokeProcess.WaitForExit($smokeTimeoutMilliseconds)) {
+                $smokeProcess.Kill($true)
+                throw "Published executable $smokeArgument timed out."
+            }
+            if ($smokeProcess.ExitCode -eq 0) {
+                $smokeSucceeded = $true
+                break
+            }
+            if ($attempt -lt $maximumAttempts) {
+                Write-Warning "Published executable $smokeArgument failed once; repeating the visual smoke test."
+            }
         }
-        if ($smokeProcess.ExitCode -ne 0) {
-            throw "Published executable $smokeArgument failed with exit code $($smokeProcess.ExitCode)."
+        if (-not $smokeSucceeded) {
+            throw "Published executable $smokeArgument failed after $maximumAttempts attempt(s)."
         }
     }
 

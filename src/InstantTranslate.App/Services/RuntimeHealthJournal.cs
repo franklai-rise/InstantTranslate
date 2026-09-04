@@ -19,6 +19,8 @@ internal enum RuntimeHealthEvent
     HotkeyRegistrationFailed,
     HotkeyStoppedUnexpectedly,
     HotkeyRecovered,
+    ZoteroBridgeStarted,
+    ZoteroBridgeStartFailed,
     SettingsReadFailed,
     CredentialReadFailed,
     CredentialRecovered,

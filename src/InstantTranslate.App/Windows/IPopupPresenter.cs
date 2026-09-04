@@ -19,12 +19,28 @@ internal sealed record PopupTranslationCorrection(
 
 internal sealed record PopupExplanationRequest(
     long RequestId,
+    Guid HistorySessionId,
+    DateTimeOffset HistoryCreatedAt,
     string SubjectText,
     string SourceText,
     string TranslationText,
     string SourceLanguage,
     string TargetLanguage,
     ExplanationScope Scope);
+
+internal sealed record PopupQuestionAnswerRequest(
+    Guid SessionId,
+    long ParentRequestId,
+    DateTimeOffset HistoryCreatedAt,
+    string Question,
+    string SourceText,
+    string TranslationText,
+    string? ExplanationText,
+    string SourceLanguage,
+    string TargetLanguage,
+    string UiLanguage,
+    QuestionContextKind ContextKind,
+    IReadOnlyList<ConversationTurn> History);
 
 internal interface IPopupPresenter
 {
@@ -39,6 +55,10 @@ internal interface IPopupPresenter
     event Action<PopupExplanationRequest>? ExplanationRequested;
 
     event Action<long>? ExplanationDismissed;
+
+    event Action<PopupQuestionAnswerRequest>? QuestionAnswerRequested;
+
+    event Action<Guid>? QuestionAnswerCancelled;
 
     void ShowLoading(long requestId, ScreenPoint anchorPoint);
 
@@ -58,9 +78,17 @@ internal interface IPopupPresenter
 
     void ShowExplanation(long requestId, string explanation);
 
+    void CompleteExplanation(long requestId);
+
     void FailExplanation(long requestId, string message);
 
     void HideExplanation(long requestId);
+
+    void ShowQuestionAnswer(Guid sessionId, string answer);
+
+    void CompleteQuestionAnswer(Guid sessionId, string answer);
+
+    void FailQuestionAnswer(Guid sessionId, string message);
 
     bool IsPointOverPopup(ScreenPoint point);
 

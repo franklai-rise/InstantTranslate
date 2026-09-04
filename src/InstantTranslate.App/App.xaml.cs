@@ -25,13 +25,16 @@ public partial class App : System.Windows.Application
     private readonly StartupRegistration _startupRegistration = new();
     private readonly TranslationPerformanceMonitor _performanceMonitor = new();
     private readonly TranslationMemoryStore _translationMemoryStore = new();
+    private readonly AiHistoryStore _aiHistoryStore = new();
     private readonly RuntimeHealthJournal _healthJournal = new();
     private volatile AppSettings _settings = AppSettings.Default;
     private GlobalMouseHook? _mouseHook;
     private UiaSelectionReader? _uiaSelectionReader;
     private GlobalHotkeyManager? _hotkeyManager;
     private SelectionTranslationCoordinator? _coordinator;
+    private ZoteroSelectionBridge? _zoteroSelectionBridge;
     private TranslationProviderFactory? _translationProviderFactory;
+    private AiSummaryService? _aiSummaryService;
     private PopupManager? _popupManager;
     private TrayIconManager? _trayIcon;
     private SingleInstanceCoordinator? _singleInstance;
@@ -62,11 +65,13 @@ public partial class App : System.Windows.Application
         var isPopupSnapshotTest = e.Args.Contains("--popup-snapshot-test", StringComparer.OrdinalIgnoreCase);
         var isSettingsSnapshotTest = e.Args.Contains("--settings-snapshot-test", StringComparer.OrdinalIgnoreCase);
         var isSettingsLifecycleTest = e.Args.Contains("--settings-lifecycle-test", StringComparer.OrdinalIgnoreCase);
+        var isAiSmokeTest = e.Args.Contains("--ai-smoke-test", StringComparer.OrdinalIgnoreCase);
         var isVisualTest = isPopupSmokeTest
                            || isSmokeTest
                            || isPopupSnapshotTest
                            || isSettingsSnapshotTest
-                           || isSettingsLifecycleTest;
+                           || isSettingsLifecycleTest
+                           || isAiSmokeTest;
         if (!isVisualTest)
         {
             _singleInstance = SingleInstanceCoordinator.AcquireWithTakeoverRetry();
@@ -86,7 +91,7 @@ public partial class App : System.Windows.Application
         // Reading Windows Credential Manager can be slow while the interactive
         // desktop is still starting. Load ordinary preferences synchronously,
         // then recover the secret off the UI thread after tray/input are live.
-        _settings = _settingsStore.LoadPreferences();
+        _settings = isAiSmokeTest ? _settingsStore.Load() : _settingsStore.LoadPreferences();
         if (_settingsStore.SettingsReadFailed)
         {
             _healthJournal.Record(RuntimeHealthEvent.SettingsReadFailed);
@@ -101,7 +106,14 @@ public partial class App : System.Windows.Application
 
         // Visual review modes render only our own WPF windows. They deliberately
         // skip global hooks, hotkeys, tray integration, and startup registration.
-        if (isPopupSnapshotTest)
+        if (isAiSmokeTest)
+        {
+            _translationProviderFactory = new TranslationProviderFactory();
+            _ = RunAiSmokeTestAsync();
+            return;
+        }
+
+        if (isPopupSmokeTest || isPopupSnapshotTest)
         {
             _popupManager = new PopupManager(
                 () => new PopupAppearanceSettings(
@@ -110,7 +122,9 @@ public partial class App : System.Windows.Application
                     TranslationFontCatalog.DefaultChineseFontFamily,
                     UiLanguageCatalog.EnglishLanguageId,
                     PopupVisualStyleCatalog.DefaultStyleId));
-            _ = RunPopupSnapshotTestAsync();
+            _ = isPopupSnapshotTest
+                ? RunPopupSnapshotTestAsync()
+                : RunPopupSmokeTestAsync();
             return;
         }
 
@@ -132,6 +146,7 @@ public partial class App : System.Windows.Application
             _mouseHook = new GlobalMouseHook();
             _mouseHook.HookStoppedUnexpectedly += OnMouseHookStoppedUnexpectedly;
             _translationProviderFactory = new TranslationProviderFactory();
+            _aiSummaryService = new AiSummaryService(_aiHistoryStore, _translationProviderFactory);
             _uiaSelectionReader = new UiaSelectionReader();
             _coordinator = new SelectionTranslationCoordinator(
                 _mouseHook,
@@ -146,8 +161,23 @@ public partial class App : System.Windows.Application
                 Dispatcher,
                 GetSettingsSnapshot,
                 _performanceMonitor,
-                _translationMemoryStore);
+                _translationMemoryStore,
+                _aiHistoryStore);
             _coordinator.TranslationFailed += OnTranslationFailed;
+
+            try
+            {
+                _zoteroSelectionBridge = new ZoteroSelectionBridge();
+                _zoteroSelectionBridge.SelectionReceived += OnZoteroSelectionReceived;
+                _zoteroSelectionBridge.Start();
+                _healthJournal.Record(RuntimeHealthEvent.ZoteroBridgeStarted);
+            }
+            catch (Exception exception)
+            {
+                _healthJournal.Record(RuntimeHealthEvent.ZoteroBridgeStartFailed, exception);
+                _zoteroSelectionBridge?.Dispose();
+                _zoteroSelectionBridge = null;
+            }
 
             _trayIcon = new TrayIconManager(_settings.IsEnabled, _settings.UiLanguage);
             _trayIcon.SettingsRequested += ShowSettings;
@@ -187,11 +217,7 @@ public partial class App : System.Windows.Application
 
             StartMouseHookWithRecovery();
 
-            if (isPopupSmokeTest)
-            {
-                _ = RunPopupSmokeTestAsync();
-            }
-            else if (isSmokeTest)
+            if (isSmokeTest)
             {
                 _smokeTestTimer = new DispatcherTimer(DispatcherPriority.ApplicationIdle, Dispatcher)
                 {
@@ -533,14 +559,60 @@ public partial class App : System.Windows.Application
             _popupManager?.ShowTranslation(
                 requestId,
                 "简约不是减少功能，而是让每一次操作都更直接。",
-                "Simplicity is not about removing capability; it is about making every action feel direct and effortless.",
+                "Simplicity is not about [[h1:removing capability]]; it is about making every action feel [[h2:direct and effortless]].",
                 LanguageDirectionResolver.English,
                 anchor);
             _popupManager?.CompleteRequest(requestId);
             await Task.Delay(350);
             var window = _popupManager?.GetWindowForVisualTest(requestId)
                 ?? throw new InvalidOperationException("无法创建浮窗预览。");
+            if (!window.HasUsableDragHandleForVisualTest())
+            {
+                throw new InvalidOperationException("浮窗顶部拖拽区尺寸不足或不可点击。");
+            }
+
+            if (!window.HasDirectFontSizeSliderForVisualTest())
+            {
+                throw new InvalidOperationException("翻译浮窗未显示可直接拖动的字号滑杆。");
+            }
+
+            if (!window.HasSingleRowExternalControlsForVisualTest())
+            {
+                throw new InvalidOperationException("翻译浮窗外置控件未保持单行或发生裁切。");
+            }
+
+            if (!window.IsCodeAnalysisEnabledForVisualTest())
+            {
+                throw new InvalidOperationException("翻译完成后代码分析按钮未正确启用。");
+            }
+
+            if (!window.HasContentHighlightsForVisualTest())
+            {
+                throw new InvalidOperationException("AI 标注没有转换为翻译正文的高亮样式。");
+            }
+
+            if (window.CurrentTranslationText.Contains("[[h", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("AI 标注协议泄漏到了可复制译文。");
+            }
+
             VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup"));
+            window.SetFontSizeForVisualTest(22);
+            await Task.Delay(100);
+            if (Math.Abs(window.TranslationFontSizeForVisualTest - 22) > 0.1)
+            {
+                throw new InvalidOperationException("翻译浮窗字号滑杆未即时更新正文。");
+            }
+
+            VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-font-large"));
+            window.SetFontSizeForVisualTest(16.5);
+
+            ThemeManager.Apply(AppSettings.Default with
+            {
+                HighlightPalette = HighlightPaletteCatalog.MorandiPaletteId,
+            });
+            await Task.Delay(80);
+            VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-highlights-morandi"));
 
             ThemeManager.Apply(AppSettings.Default with
             {
@@ -604,15 +676,162 @@ public partial class App : System.Windows.Application
 
             window.ShowExplanationLoading();
             window.ShowExplanation(
-                "释义：这句话强调简约并非删减能力，而是降低操作阻力。\n\n要点：capability 指功能能力；direct and effortless 表示直接、无需额外心智负担。\n\n语境：适合用于产品设计、交互体验或工作流程的说明。");
+                "释义：这句话强调[[h1:简约并非删减能力]]，而是降低操作阻力。\n\n要点：[[h2:capability]] 指功能能力；direct and effortless 表示直接、无需额外心智负担。\n\n语境：适合用于产品设计、交互体验或工作流程的说明。");
+            window.MarkExplanationComplete();
             await Task.Delay(420);
             if (!window.IsExplanationVisibleForVisualTest())
             {
                 throw new InvalidOperationException("AI 解释覆盖层未显示。");
             }
 
+            if (!window.HasExplanationRecordButtonForVisualTest()
+                || !window.IsExplanationRecordEnabledForVisualTest())
+            {
+                throw new InvalidOperationException("AI 解释完成后 Record 按钮未正确启用。");
+            }
+
+            if (!window.HasContentHighlightsForVisualTest())
+            {
+                throw new InvalidOperationException("AI 标注没有转换为解释正文的高亮样式。");
+            }
+
+            if (window.CurrentExplanationText.Contains("[[h", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("AI 标注协议泄漏到了可复制解释。");
+            }
+
             VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-explanation"));
             window.HideExplanation(notifyDismissed: false);
+
+            window.StartCodeAnalysisForVisualTest();
+            window.ShowExplanation(
+                "语言判断：[[h1:C#]]，依据是 Console.WriteLine 与分号语法。\n\n常见用途：用于 .NET 控制台程序输出文本。\n\n代码作用：向标准输出写入一行内容。\n\n关键逻辑：调用 Console 类型的静态 [[h2:WriteLine]] 方法。\n\n替代与注意：可使用日志框架替代；生产环境应避免输出敏感信息。");
+            window.MarkExplanationComplete();
+            await Task.Delay(220);
+            if (!window.IsCodeAnalysisPresentationForVisualTest())
+            {
+                throw new InvalidOperationException("代码分析覆盖层未正确应用标题或模式。");
+            }
+
+            VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-code-analysis"));
+            window.HideExplanation(notifyDismissed: false);
+
+            var questionWindow = new QuestionAnswerWindow(
+                Guid.NewGuid(),
+                UiLanguageCatalog.EnglishLanguageId,
+                TranslationFontCatalog.DefaultEnglishFontFamily,
+                TranslationFontCatalog.DefaultChineseFontFamily);
+            questionWindow.ShowNear(window);
+            questionWindow.BeginQuestion("Why is this wording effective?", isRetry: false);
+            questionWindow.UpdateAnswer(
+                "It keeps the meaning [[h1:precise]] while reducing unnecessary wording.\n\n"
+                + "The contrast between [[h2:capability and effort]] makes the design principle easy to remember.");
+            questionWindow.CompleteAnswer(
+                "It keeps the meaning [[h1:precise]] while reducing unnecessary wording.\n\n"
+                + "The contrast between [[h2:capability and effort]] makes the design principle easy to remember.");
+            await Task.Delay(180);
+            if (!questionWindow.HasDirectFontSizeSliderForVisualTest())
+            {
+                throw new InvalidOperationException("问答窗未显示可直接拖动的字号滑杆。");
+            }
+
+            if (!questionWindow.HasSingleRowExternalControlsForVisualTest())
+            {
+                throw new InvalidOperationException("问答窗外置控件未保持单行。");
+            }
+
+            if (!questionWindow.HasRecordButtonForVisualTest()
+                || !questionWindow.IsRecordEnabledForVisualTest())
+            {
+                throw new InvalidOperationException("问答完成后 Record 按钮未正确启用。");
+            }
+
+            if (!questionWindow.HasContentHighlightsForVisualTest())
+            {
+                throw new InvalidOperationException("AI 标注没有转换为问答正文的高亮样式。");
+            }
+
+            if (questionWindow.CompletedTurns.Any(turn => turn.Content.Contains("[[h", StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException("AI 标注协议泄漏到了后续问答上下文。");
+            }
+
+            VisualSnapshotRenderer.SavePng(questionWindow, GetSnapshotPath("question-answer"));
+            questionWindow.SetFontSizeForVisualTest(23);
+            await Task.Delay(100);
+            if (Math.Abs(questionWindow.TranscriptFontSizeForVisualTest - 23) > 0.1)
+            {
+                throw new InvalidOperationException("问答窗字号滑杆未即时更新正文。");
+            }
+
+            VisualSnapshotRenderer.SavePng(questionWindow, GetSnapshotPath("question-answer-font-large"));
+            questionWindow.ApplySizePresetForVisualTest(WindowSizePreset.Square);
+            await Task.Delay(120);
+            if (Math.Abs(questionWindow.ActualWidth - questionWindow.ActualHeight) > 2)
+            {
+                throw new InvalidOperationException("问答窗正方形尺寸预设未正确应用。");
+            }
+
+            VisualSnapshotRenderer.SavePng(questionWindow, GetSnapshotPath("question-answer-square"));
+            questionWindow.ApplySizePresetForVisualTest(WindowSizePreset.Small);
+            await Task.Delay(120);
+            if (questionWindow.ActualWidth >= questionWindow.ActualHeight * 2)
+            {
+                throw new InvalidOperationException("问答窗小尺寸预设比例异常。");
+            }
+
+            VisualSnapshotRenderer.SavePng(questionWindow, GetSnapshotPath("question-answer-small"));
+            questionWindow.Close();
+
+            _popupManager.OpenDeepSeekChatForVisualTest(requestId);
+            await Task.Delay(160);
+            var deepSeekChatWindow = _popupManager.GetDeepSeekChatWindowForVisualTest()
+                ?? throw new InvalidOperationException("无法创建 DeepSeek 快速聊天窗。");
+            if (!deepSeekChatWindow.IsDeepSeekQuickChat || !deepSeekChatWindow.IsPinned)
+            {
+                throw new InvalidOperationException("DeepSeek 快速聊天窗未以默认置顶模式打开。");
+            }
+
+            if (!deepSeekChatWindow.HasDirectFontSizeSliderForVisualTest())
+            {
+                throw new InvalidOperationException("DeepSeek 快速聊天窗未显示可直接拖动的字号滑杆。");
+            }
+
+            if (!deepSeekChatWindow.HasSingleRowExternalControlsForVisualTest())
+            {
+                throw new InvalidOperationException("DeepSeek 快速聊天窗外置控件未保持单行。");
+            }
+
+            deepSeekChatWindow.BeginQuestion("为什么天空通常是蓝色的？", isRetry: false);
+            deepSeekChatWindow.CompleteAnswer(
+                "阳光进入大气后，波长较短的[[h1:蓝光]]比红光更容易被空气分子散射，因此从多数方向进入眼睛的散射光以[[h2:蓝色为主]]。");
+            await Task.Delay(120);
+            if (!deepSeekChatWindow.HasRecordButtonForVisualTest()
+                || !deepSeekChatWindow.IsRecordEnabledForVisualTest())
+            {
+                throw new InvalidOperationException("DeepSeek 快速聊天完成后 Record 按钮未正确启用。");
+            }
+
+            if (!deepSeekChatWindow.HasContentHighlightsForVisualTest())
+            {
+                throw new InvalidOperationException("DeepSeek 快速聊天没有呈现 AI 重点高亮。");
+            }
+
+            if (deepSeekChatWindow.CompletedTurns.Any(turn => turn.Content.Contains("[[h", StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException("AI 标注协议泄漏到了快速聊天上下文。");
+            }
+
+            VisualSnapshotRenderer.SavePng(deepSeekChatWindow, GetSnapshotPath("deepseek-chat"));
+            deepSeekChatWindow.ApplySizePresetForVisualTest(WindowSizePreset.Tall);
+            await Task.Delay(120);
+            if (deepSeekChatWindow.ActualHeight <= deepSeekChatWindow.ActualWidth)
+            {
+                throw new InvalidOperationException("DeepSeek 聊天窗竖向尺寸预设未正确应用。");
+            }
+
+            VisualSnapshotRenderer.SavePng(deepSeekChatWindow, GetSnapshotPath("deepseek-chat-tall"));
+            deepSeekChatWindow.Close();
 
             const string longTranslation =
                 "A restrained interface should remain comfortable when the content grows. "
@@ -634,10 +853,90 @@ public partial class App : System.Windows.Application
             }
 
             VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-overflow"));
+            window.ApplySizePresetForVisualTest(WindowSizePreset.Wide);
+            await Task.Delay(120);
+            if (window.ActualWidth <= window.ActualHeight)
+            {
+                throw new InvalidOperationException("翻译浮窗横向尺寸预设未正确应用。");
+            }
+
+            VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-wide"));
+            var wideWidth = window.ActualWidth;
+            window.ApplySizePresetForVisualTest(WindowSizePreset.Small);
+            await Task.Delay(120);
+            if (window.ActualWidth >= wideWidth)
+            {
+                throw new InvalidOperationException("翻译浮窗小尺寸预设未缩小窗口。");
+            }
+
+            if (!window.HasSingleRowExternalControlsForVisualTest())
+            {
+                throw new InvalidOperationException("翻译浮窗小尺寸预设裁切了单行外置控件。");
+            }
+
+            VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-small"));
         }
         catch (Exception exception)
         {
             System.Diagnostics.Debug.WriteLine($"InstantTranslate popup snapshot failed: {exception}");
+            _exitCode = 1;
+        }
+        finally
+        {
+            ExitApplication();
+        }
+    }
+
+    private async Task RunAiSmokeTestAsync()
+    {
+        try
+        {
+            if (_translationProviderFactory is null
+                || !string.Equals(_settings.ProviderId, "deepseek", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(_settings.DeepSeekApiKey))
+            {
+                throw new InvalidOperationException("DeepSeek is not fully configured.");
+            }
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+            var answerProvider = _translationProviderFactory.CreateQuestionAnswerProvider(_settings);
+            var answer = new System.Text.StringBuilder();
+            await foreach (var chunk in answerProvider.AnswerAsync(
+                               new QuestionAnswerRequest(
+                                   "What is two plus two? Reply with only the answer.",
+                                   string.Empty,
+                                   string.Empty,
+                                   null,
+                                   string.Empty,
+                                   string.Empty,
+                                   UiLanguageCatalog.EnglishLanguageId,
+                                   QuestionContextKind.GeneralChat,
+                                   []),
+                               timeout.Token))
+            {
+                answer.Append(chunk.TextDelta);
+            }
+
+            var summaryProvider = _translationProviderFactory.CreateSummaryProvider(_settings);
+            var summary = new System.Text.StringBuilder();
+            await foreach (var chunk in summaryProvider.SummarizeAsync(
+                               new SummaryRequest(
+                                   "schema: instant-translate-history/v1\nOriginal: clear wording\nTranslation: 清晰的措辞",
+                                   UiLanguageCatalog.EnglishLanguageId,
+                                   "today"),
+                               timeout.Token))
+            {
+                summary.Append(chunk.TextDelta);
+            }
+
+            if (answer.Length == 0 || summary.Length == 0)
+            {
+                throw new InvalidOperationException("DeepSeek returned an empty AI smoke-test response.");
+            }
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"InstantTranslate AI smoke test failed: {exception.GetType().Name}");
             _exitCode = 1;
         }
         finally
@@ -660,6 +959,11 @@ public partial class App : System.Windows.Application
             });
             window.Show();
             await Task.Delay(350);
+            if (window.FindName("HighlightPaletteComboBox") is not System.Windows.Controls.ComboBox paletteComboBox
+                || paletteComboBox.Items.Count < 5)
+            {
+                throw new InvalidOperationException("设置页未显示 AI 重点高亮配色选项。");
+            }
             var visual = window.Content as FrameworkElement ?? window;
             VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings"));
             VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-en"));
@@ -668,9 +972,13 @@ public partial class App : System.Windows.Application
                 englishScrollViewer.ScrollToVerticalOffset(330);
                 await Task.Delay(100);
                 VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-intelligence-en"));
+                VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-history-en"));
                 englishScrollViewer.ScrollToVerticalOffset(760);
                 await Task.Delay(100);
                 VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-fonts-en"));
+                englishScrollViewer.ScrollToVerticalOffset(1180);
+                await Task.Delay(100);
+                VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-appearance-en"));
             }
 
             window.Close();
@@ -690,9 +998,13 @@ public partial class App : System.Windows.Application
                 chineseScrollViewer.ScrollToVerticalOffset(330);
                 await Task.Delay(100);
                 VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-intelligence-zh"));
+                VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-history-zh"));
                 chineseScrollViewer.ScrollToVerticalOffset(760);
                 await Task.Delay(100);
                 VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-fonts-zh"));
+                chineseScrollViewer.ScrollToVerticalOffset(1180);
+                await Task.Delay(100);
+                VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-appearance-zh"));
             }
         }
         catch (Exception exception)
@@ -873,7 +1185,9 @@ public partial class App : System.Windows.Application
                 _settings.EnglishTranslationFontFamily,
                 _settings.ChineseTranslationFontFamily,
                 _settings.UiLanguage,
-                _settings.PopupVisualStyle));
+                _settings.PopupVisualStyle),
+            (request, cancellationToken) =>
+                _aiHistoryStore.AppendManualRecordAsync(_settings, request, cancellationToken));
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -940,7 +1254,10 @@ public partial class App : System.Windows.Application
             var settingsWindow = new SettingsWindow(
                 settingsSnapshot,
                 () => _translationMemoryStore.Count,
-                _translationMemoryStore.Clear);
+                _translationMemoryStore.Clear,
+                (settings, range, cancellationToken) => _aiSummaryService is null
+                    ? Task.FromResult(new AiSummaryGenerationResult(false, 0, ErrorCode: "summary_unavailable"))
+                    : _aiSummaryService.GenerateAsync(settings, range, cancellationToken));
             _settingsWindow = settingsWindow;
             bool? result;
             try
@@ -1055,6 +1372,24 @@ public partial class App : System.Windows.Application
             DispatcherPriority.Send);
     }
 
+    private void OnZoteroSelectionReceived(string text)
+    {
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (_isExiting || !_settings.IsEnabled || _coordinator is null)
+                {
+                    return;
+                }
+
+                var anchor = NativeMethods.GetCursorPos(out var point)
+                    ? point.ToScreenPoint()
+                    : new ScreenPoint(160, 140);
+                _coordinator.TranslateText(text, anchor, TranslationTrigger.ZoteroIntegration);
+            },
+            DispatcherPriority.Send);
+    }
+
     private void ShowAbout()
     {
         Dispatcher.BeginInvoke(
@@ -1092,11 +1427,16 @@ public partial class App : System.Windows.Application
                                       ?? (useChinese
                                           ? "浮窗状态\n不可用"
                                           : "Popup status\nUnavailable");
+                    var zoteroStatus = _zoteroSelectionBridge?.CreateStatusReport(useChinese)
+                                       ?? (useChinese
+                                           ? "Zotero PDF 桥接状态\n不可用"
+                                           : "Zotero PDF bridge status\nUnavailable");
                     WpfClipboard.SetText(string.Join(
                         Environment.NewLine + Environment.NewLine,
                         _performanceMonitor.CreateReport(useChinese),
                         inputStatus,
                         selectionStatus,
+                        zoteroStatus,
                         popupStatus,
                         _healthJournal.CreateReport(useChinese)));
                     _trayIcon?.ShowInfo(
@@ -1300,6 +1640,13 @@ public partial class App : System.Windows.Application
         }
 
         StopCredentialRecoveryTimer();
+
+        if (_zoteroSelectionBridge is not null)
+        {
+            _zoteroSelectionBridge.SelectionReceived -= OnZoteroSelectionReceived;
+            _zoteroSelectionBridge.Dispose();
+            _zoteroSelectionBridge = null;
+        }
 
         if (_coordinator is not null)
         {

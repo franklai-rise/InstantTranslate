@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
@@ -12,7 +13,10 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
 {
     private const int MaximumTextLength = 20_000;
     private const int MaximumContextLength = 3000;
-    private const int MaximumAncestorDepth = 10;
+    // Chromium's PDF accessibility tree can put the TextPattern document more
+    // than ten control-view nodes above the glyph under the pointer.
+    internal const int MaximumAncestorDepth = 32;
+    private const int MaximumDocumentCandidates = 8;
     private const int MaximumConcurrentReads = 2;
     private readonly SemaphoreSlim _readSlots = new(MaximumConcurrentReads, MaximumConcurrentReads);
     private readonly ConcurrentDictionary<uint, byte> _activeTargetProcesses = new();
@@ -222,6 +226,8 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
         bool includeContext,
         CancellationToken cancellationToken)
     {
+        EdgeAccessibilityActivator.ActivateIfNeeded(point);
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var candidate in GetCandidateElements(point))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -291,6 +297,95 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
                     yield return current;
                 }
             }
+        }
+
+        // Edge's PDF renderer occasionally exposes the selection only on a
+        // sibling Document provider rather than on the hit element's parent
+        // chain. Search the already-identified top-level window as a bounded,
+        // final fallback. The entire UIA read runs in the existing isolated,
+        // cancellable worker, so a faulty external provider cannot block WPF.
+        foreach (var document in FindDocumentCandidates(expectedRootOwner, hitProcessId))
+        {
+            var identity = TryGetIdentity(document);
+            if (identity is null || seenRuntimeIds.Add(identity))
+            {
+                yield return document;
+            }
+        }
+    }
+
+    private static IReadOnlyList<AutomationElement> FindDocumentCandidates(
+        IntPtr expectedRootOwner,
+        int? expectedProcessId)
+    {
+        if (expectedRootOwner == IntPtr.Zero
+            || expectedProcessId is not > 0
+            || !IsDocumentHostProcess(expectedProcessId.Value))
+        {
+            return Array.Empty<AutomationElement>();
+        }
+
+        try
+        {
+            var windowRoot = AutomationElement.FromHandle(expectedRootOwner);
+            var documents = windowRoot.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(
+                    AutomationElement.ControlTypeProperty,
+                    ControlType.Document));
+            var result = new List<AutomationElement>(
+                Math.Min(documents.Count, MaximumDocumentCandidates));
+            for (var index = 0;
+                 index < documents.Count && result.Count < MaximumDocumentCandidates;
+                 index++)
+            {
+                var document = documents[index];
+                if (TryGetProcessId(document) == expectedProcessId
+                    && !IsPasswordOrUnknown(document))
+                {
+                    result.Add(document);
+                }
+            }
+
+            return result;
+        }
+        catch (ElementNotAvailableException)
+        {
+            return Array.Empty<AutomationElement>();
+        }
+        catch (InvalidOperationException)
+        {
+            return Array.Empty<AutomationElement>();
+        }
+        catch (COMException)
+        {
+            return Array.Empty<AutomationElement>();
+        }
+    }
+
+    private static bool IsDocumentHostProcess(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return process.ProcessName.Equals("msedge", StringComparison.OrdinalIgnoreCase)
+                   || process.ProcessName.Equals("chrome", StringComparison.OrdinalIgnoreCase)
+                   || process.ProcessName.Equals("chromium", StringComparison.OrdinalIgnoreCase)
+                   || process.ProcessName.Equals("brave", StringComparison.OrdinalIgnoreCase)
+                   || process.ProcessName.Equals("firefox", StringComparison.OrdinalIgnoreCase)
+                   || process.ProcessName.Equals("zotero", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
         }
     }
 

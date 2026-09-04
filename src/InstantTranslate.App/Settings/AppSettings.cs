@@ -53,6 +53,22 @@ internal sealed record AppSettings
     /// </summary>
     public string PopupVisualStyle { get; init; } = PopupVisualStyleCatalog.DefaultStyleId;
 
+    /// <summary>
+    /// Controls the three AI-selected emphasis colors used inside generated
+    /// translation, explanation, and answer text.
+    /// </summary>
+    public string HighlightPalette { get; init; } = HighlightPaletteCatalog.DefaultPaletteId;
+
+    /// <summary>
+    /// Persists completed AI explanations and Q&amp;A turns as plain Markdown.
+    /// It is deliberately opt-in because records can contain selected text.
+    /// </summary>
+    public bool AiHistoryEnabled { get; init; }
+
+    public string AiHistoryDirectory { get; init; } = string.Empty;
+
+    public SummaryRange AiSummaryRange { get; init; } = SummaryRange.Today;
+
     public double DefaultTranslationFontSize { get; init; } = 16.5;
 
     public string EnglishTranslationFontFamily { get; init; } = TranslationFontCatalog.DefaultEnglishFontFamily;

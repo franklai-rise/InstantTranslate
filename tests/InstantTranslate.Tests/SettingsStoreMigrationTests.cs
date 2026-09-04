@@ -52,6 +52,10 @@ public sealed class SettingsStoreMigrationTests
         Assert.Equal("balanced", migrated.TranslationMode);
         Assert.Equal("natural", migrated.TranslationTone);
         Assert.Equal(PopupVisualStyleCatalog.DefaultStyleId, migrated.PopupVisualStyle);
+        Assert.Equal(HighlightPaletteCatalog.DefaultPaletteId, migrated.HighlightPalette);
+        Assert.False(migrated.AiHistoryEnabled);
+        Assert.Empty(migrated.AiHistoryDirectory);
+        Assert.Equal(SummaryRange.Today, migrated.AiSummaryRange);
     }
 
     [Fact]
@@ -65,8 +69,11 @@ public sealed class SettingsStoreMigrationTests
             TranslationMode = "turbo",
             TranslationTone = "dramatic",
             PopupVisualStyle = "unrecognized-style",
+            HighlightPalette = "invalid-palette",
             PersonalGlossary = "  API => 接口  ",
             DeepSeekApiKey = "credential-secret",
+            AiHistoryDirectory = "  C:\\History  ",
+            AiSummaryRange = (SummaryRange)999,
         };
 
         var normalized = SettingsStore.NormalizeSettings(settings);
@@ -77,8 +84,11 @@ public sealed class SettingsStoreMigrationTests
         Assert.Equal("balanced", normalized.TranslationMode);
         Assert.Equal("natural", normalized.TranslationTone);
         Assert.Equal(PopupVisualStyleCatalog.DefaultStyleId, normalized.PopupVisualStyle);
+        Assert.Equal(HighlightPaletteCatalog.DefaultPaletteId, normalized.HighlightPalette);
         Assert.Equal("API => 接口", normalized.PersonalGlossary);
         Assert.Equal("credential-secret", normalized.DeepSeekApiKey);
+        Assert.Equal("C:\\History", normalized.AiHistoryDirectory);
+        Assert.Equal(SummaryRange.Today, normalized.AiSummaryRange);
     }
 
     [Fact]

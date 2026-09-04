@@ -1,4 +1,7 @@
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
+using InstantTranslate.Services;
 using InstantTranslate.Settings;
 using InstantTranslate.Translation;
 using WpfMessageBox = System.Windows.MessageBox;
@@ -50,7 +53,37 @@ internal partial class SettingsWindow : Window
             ["PopupStyleMinimal"] = ("Minimal", "极简"),
             ["PopupStyleBubble"] = ("Bubble", "气泡"),
             ["PopupStyleBubbleV2"] = ("Bubble 2.0", "气泡 2.0"),
+            ["HighlightPalette"] = ("Highlight palette", "重点高亮配色"),
+            ["HighlightPalettePreview"] = ("AI emphasis preview", "AI 强调预览"),
+            ["HighlightPaletteDescription"] = ("DeepSeek marks only the most useful generated phrases. Copy, history, and saved records keep normal text.", "DeepSeek 仅标注 AI 生成内容中最值得注意的短语；复制、记录和历史始终保留普通正文。"),
+            ["HighlightPaletteClarity"] = ("Clarity", "清晰"),
+            ["HighlightPaletteMorandi"] = ("Morandi", "莫兰迪"),
+            ["HighlightPaletteOcean"] = ("Ocean", "海洋"),
+            ["HighlightPaletteWarm"] = ("Warm", "暖调"),
+            ["HighlightPaletteContrast"] = ("High contrast", "高对比"),
             ["DefaultTranslationFontSize"] = ("Default translation size", "默认译文字号"),
+            ["AiHistoryTitle"] = ("AI history", "AI 记录"),
+            ["AiHistoryDescription"] = ("Choose where manual Record entries are saved. Automatic history for every completed explanation and answer remains optional.", "选择手动 Record 内容的保存位置；是否自动保存每次完成的解释和问答仍由你决定。"),
+            ["EnableAiHistory"] = ("Save AI explanations and Q&A", "保存 AI 解释和问答"),
+            ["AiHistoryPrivacy"] = ("Manual Record saves only when clicked. Files are readable Markdown and may contain private selected text.", "手动 Record 只在点击后保存；文件是可直接阅读的 Markdown，可能包含私密划词内容。"),
+            ["HistoryDirectory"] = ("Save folder", "保存目录"),
+            ["ManualRecordDirectoryDescription"] = ("Manual Record works even when automatic history is off and appends to one Markdown file per day.", "即使关闭自动 AI 记录，手动 Record 仍会使用此目录，并按一天一份 Markdown 追加保存。"),
+            ["Browse"] = ("Browse", "选择目录"),
+            ["OpenFolder"] = ("Open", "打开目录"),
+            ["SummaryRange"] = ("Summary range", "总结范围"),
+            ["SummaryToday"] = ("Today", "今天"),
+            ["SummaryLastSevenDays"] = ("Last 7 days", "最近 7 天"),
+            ["SummaryAll"] = ("All records", "全部记录"),
+            ["GenerateSummary"] = ("AI summary", "AI 总结"),
+            ["HistoryDirectoryRequired"] = ("Choose a writable folder before enabling AI history.", "开启 AI 记录前，请选择可写入的目录。"),
+            ["GeneratingSummary"] = ("Generating summary…", "正在生成总结…"),
+            ["SummaryCreated"] = ("Summary created from {0} record(s).", "已根据 {0} 条记录生成总结。"),
+            ["SummaryNoRecords"] = ("No InstantTranslate records were found in this range.", "所选范围内没有 InstantTranslate 记录。"),
+            ["SummaryTimeout"] = ("Summary timed out. Please try again.", "总结超时，请重试。"),
+            ["SummaryProviderFailed"] = ("The AI service could not generate the summary.", "AI 服务未能生成总结。"),
+            ["HistoryDirectoryUnavailable"] = ("The selected folder is unavailable or not writable.", "所选目录不可用或无法写入。"),
+            ["SummaryUnavailable"] = ("Save settings before generating a summary.", "请先保存设置，再生成总结。"),
+            ["ChooseHistoryFolder"] = ("Choose an AI history folder", "选择 AI 记录目录"),
             ["TranslationServiceTitle"] = ("Translation service", "翻译服务"),
             ["TranslationServiceDescription"] = ("Your API key is stored only in Windows Credential Manager on this device.", "API Key 仅保存在本机 Windows 凭据管理器中。"),
             ["Provider"] = ("Provider", "服务"),
@@ -85,17 +118,23 @@ internal partial class SettingsWindow : Window
     private string? _connectionStatusLocalizationKey;
     private readonly Func<int>? _getTranslationMemoryCount;
     private readonly Action? _clearTranslationMemory;
+    private readonly AppSettings _baseSettings;
+    private readonly Func<AppSettings, SummaryRange, CancellationToken, Task<AiSummaryGenerationResult>>? _generateSummary;
     private CancellationTokenSource? _connectionTestCancellation;
+    private CancellationTokenSource? _summaryCancellation;
     private bool _isClosed;
     private bool _apiKeyClearRequested;
 
     public SettingsWindow(
         AppSettings settings,
         Func<int>? getTranslationMemoryCount = null,
-        Action? clearTranslationMemory = null)
+        Action? clearTranslationMemory = null,
+        Func<AppSettings, SummaryRange, CancellationToken, Task<AiSummaryGenerationResult>>? generateSummary = null)
     {
+        _baseSettings = settings;
         _getTranslationMemoryCount = getTranslationMemoryCount;
         _clearTranslationMemory = clearTranslationMemory;
+        _generateSummary = generateSummary;
         InitializeComponent();
 
         EnabledCheckBox.IsChecked = settings.IsEnabled;
@@ -118,6 +157,7 @@ internal partial class SettingsWindow : Window
         SelectTheme(settings.ColorTheme);
         CustomAccentColorTextBox.Text = settings.CustomAccentColor;
         SelectPopupVisualStyle(settings.PopupVisualStyle);
+        SelectHighlightPalette(settings.HighlightPalette);
         DefaultFontSizeSlider.Value = Math.Clamp(settings.DefaultTranslationFontSize, 12, 34);
         SetComboText(
             EnglishTranslationFontComboBox,
@@ -129,10 +169,14 @@ internal partial class SettingsWindow : Window
         EndpointTextBox.Text = settings.DeepSeekEndpoint;
         SetComboText(ModelComboBox, settings.DeepSeekModel);
         ApiKeyPasswordBox.Password = settings.DeepSeekApiKey;
+        AiHistoryEnabledCheckBox.IsChecked = settings.AiHistoryEnabled;
+        AiHistoryDirectoryTextBox.Text = settings.AiHistoryDirectory;
+        SelectSummaryRange(settings.AiSummaryRange);
         ApplyUiLanguage(settings.UiLanguage);
         UpdateProviderFields();
         UpdateThemePreview();
         UpdateTranslationMemoryStatus();
+        UpdateAiHistoryControls();
     }
 
     public AppSettings? ResultSettings { get; private set; }
@@ -143,6 +187,7 @@ internal partial class SettingsWindow : Window
     {
         _isClosed = true;
         _connectionTestCancellation?.Cancel();
+        _summaryCancellation?.Cancel();
         ApiKeyPasswordBox.Clear();
         DataContext = null;
         Content = null;
@@ -179,6 +224,8 @@ internal partial class SettingsWindow : Window
         var colorTheme = ColorThemeComboBox.SelectedValue as string ?? ThemeCatalog.DefaultThemeId;
         var popupVisualStyle = PopupVisualStyleCatalog.Normalize(
             PopupVisualStyleComboBox.SelectedValue as string);
+        var highlightPalette = HighlightPaletteCatalog.Normalize(
+            HighlightPaletteComboBox.SelectedValue as string);
         var customAccentColor = CustomAccentColorTextBox.Text.Trim();
         if (colorTheme == ThemeCatalog.CustomThemeId
             && !ThemeCatalog.TryNormalizeHexColor(customAccentColor, out customAccentColor))
@@ -216,6 +263,24 @@ internal partial class SettingsWindow : Window
             }
         }
 
+        var aiHistoryEnabled = AiHistoryEnabledCheckBox.IsChecked == true;
+        var aiHistoryDirectory = AiHistoryDirectoryTextBox.Text.Trim();
+        if (aiHistoryEnabled && string.IsNullOrWhiteSpace(aiHistoryDirectory))
+        {
+            WpfMessageBox.Show(this, L("HistoryDirectoryRequired"), L("InvalidSettings"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            AiHistoryDirectoryTextBox.Focus();
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(aiHistoryDirectory)
+            && (!Path.IsPathFullyQualified(aiHistoryDirectory)
+                || !AiHistoryStore.TryValidateWritableDirectory(aiHistoryDirectory, out _)))
+        {
+            WpfMessageBox.Show(this, L("HistoryDirectoryUnavailable"), L("InvalidSettings"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            AiHistoryDirectoryTextBox.Focus();
+            return;
+        }
+
         ResultSettings = new AppSettings
         {
             IsEnabled = EnabledCheckBox.IsChecked == true,
@@ -235,6 +300,7 @@ internal partial class SettingsWindow : Window
             ColorTheme = colorTheme,
             CustomAccentColor = customAccentColor,
             PopupVisualStyle = popupVisualStyle,
+            HighlightPalette = highlightPalette,
             DefaultTranslationFontSize = Math.Round(DefaultFontSizeSlider.Value, 1),
             UiLanguage = _uiLanguage,
             EnglishTranslationFontFamily = TranslationFontCatalog.NormalizeEnglish(ReadComboText(EnglishTranslationFontComboBox)),
@@ -243,6 +309,9 @@ internal partial class SettingsWindow : Window
             DeepSeekEndpoint = endpointText,
             DeepSeekModel = model,
             DeepSeekApiKey = apiKey,
+            AiHistoryEnabled = aiHistoryEnabled,
+            AiHistoryDirectory = aiHistoryDirectory,
+            AiSummaryRange = ReadSummaryRange(),
         };
 
         DialogResult = true;
@@ -320,6 +389,9 @@ internal partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(
             PopupVisualStyleComboBox,
             L("PopupVisualStyle"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            HighlightPaletteComboBox,
+            L("HighlightPalette"));
 
         SelectionDelayTextBox.ToolTip = L("SelectionDelayTooltip");
         MaximumSelectionTextBox.ToolTip = L("MaximumSelectionTooltip");
@@ -353,9 +425,17 @@ internal partial class SettingsWindow : Window
         SetComboItemContent(PopupVisualStyleComboBox, "minimal", L("PopupStyleMinimal"));
         SetComboItemContent(PopupVisualStyleComboBox, "bubble", L("PopupStyleBubble"));
         SetComboItemContent(PopupVisualStyleComboBox, "bubble-v2", L("PopupStyleBubbleV2"));
+        SetComboItemContent(HighlightPaletteComboBox, "clarity", L("HighlightPaletteClarity"));
+        SetComboItemContent(HighlightPaletteComboBox, "morandi", L("HighlightPaletteMorandi"));
+        SetComboItemContent(HighlightPaletteComboBox, "ocean", L("HighlightPaletteOcean"));
+        SetComboItemContent(HighlightPaletteComboBox, "warm", L("HighlightPaletteWarm"));
+        SetComboItemContent(HighlightPaletteComboBox, "contrast", L("HighlightPaletteContrast"));
 
         SetComboItemContent(ProviderComboBox, "deepseek", "DeepSeek API");
         SetComboItemContent(ProviderComboBox, "mock", _uiLanguage == "zh-CN" ? "Mock · 离线测试" : "Mock · offline test");
+        SetComboItemContent(AiSummaryRangeComboBox, "today", L("SummaryToday"));
+        SetComboItemContent(AiSummaryRangeComboBox, "last-7-days", L("SummaryLastSevenDays"));
+        SetComboItemContent(AiSummaryRangeComboBox, "all", L("SummaryAll"));
 
         SetComboItemContent(ChineseTranslationFontComboBox, "SimHei", _uiLanguage == UiLanguageCatalog.SimplifiedChineseLanguageId ? "黑体 (SimHei)" : "SimHei (Heiti)");
         SetComboItemContent(ChineseTranslationFontComboBox, "Microsoft YaHei UI", _uiLanguage == UiLanguageCatalog.SimplifiedChineseLanguageId ? "微软雅黑 (Microsoft YaHei UI)" : "Microsoft YaHei UI");
@@ -368,6 +448,160 @@ internal partial class SettingsWindow : Window
         }
 
         UpdateTranslationMemoryStatus();
+        UpdateAiHistoryControls();
+    }
+
+    private void SelectSummaryRange(SummaryRange range)
+    {
+        var stableId = SummaryRangeCatalog.ToStableId(range);
+        foreach (var item in AiSummaryRangeComboBox.Items.OfType<System.Windows.Controls.ComboBoxItem>())
+        {
+            if (string.Equals(item.Tag as string, stableId, StringComparison.OrdinalIgnoreCase))
+            {
+                AiSummaryRangeComboBox.SelectedItem = item;
+                return;
+            }
+        }
+
+        AiSummaryRangeComboBox.SelectedIndex = 0;
+    }
+
+    private SummaryRange ReadSummaryRange() =>
+        SummaryRangeCatalog.FromStableId(AiSummaryRangeComboBox.SelectedValue as string);
+
+    private void AiHistoryEnabledCheckBox_Changed(object sender, RoutedEventArgs e) =>
+        UpdateAiHistoryControls();
+
+    private void AiHistoryDirectoryTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e) =>
+        UpdateAiHistoryControls();
+
+    private void UpdateAiHistoryControls()
+    {
+        if (AiHistoryDirectoryTextBox is null || GenerateAiSummaryButton is null)
+        {
+            return;
+        }
+
+        var hasDirectory = Path.IsPathFullyQualified(AiHistoryDirectoryTextBox.Text.Trim());
+        OpenAiHistoryDirectoryButton.IsEnabled = hasDirectory;
+        GenerateAiSummaryButton.IsEnabled = AiHistoryEnabledCheckBox.IsChecked == true
+                                            && hasDirectory
+                                            && _generateSummary is not null
+                                            && _summaryCancellation is null;
+    }
+
+    private void BrowseAiHistoryDirectoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = L("ChooseHistoryFolder"),
+            Multiselect = false,
+        };
+        if (Path.IsPathFullyQualified(AiHistoryDirectoryTextBox.Text.Trim()))
+        {
+            dialog.InitialDirectory = AiHistoryDirectoryTextBox.Text.Trim();
+        }
+
+        if (dialog.ShowDialog(this) == true)
+        {
+            AiHistoryDirectoryTextBox.Text = dialog.FolderName;
+            AiHistoryStatusText.Text = string.Empty;
+        }
+    }
+
+    private void OpenAiHistoryDirectoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        var directory = AiHistoryDirectoryTextBox.Text.Trim();
+        if (!Path.IsPathFullyQualified(directory))
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var recordsRoot = Path.Combine(directory, "InstantTranslate Records");
+            Process.Start(new ProcessStartInfo(Directory.Exists(recordsRoot) ? recordsRoot : directory)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            AiHistoryStatusText.Text = L("HistoryDirectoryUnavailable");
+            AiHistoryStatusText.SetResourceReference(ForegroundProperty, "DangerBrush");
+        }
+    }
+
+    private async void GenerateAiSummaryButton_Click(object sender, RoutedEventArgs e)
+    {
+        var directory = AiHistoryDirectoryTextBox.Text.Trim();
+        if (_generateSummary is null
+            || AiHistoryEnabledCheckBox.IsChecked != true
+            || !Path.IsPathFullyQualified(directory)
+            || !AiHistoryStore.TryValidateWritableDirectory(directory, out _))
+        {
+            AiHistoryStatusText.Text = L("HistoryDirectoryRequired");
+            AiHistoryStatusText.SetResourceReference(ForegroundProperty, "DangerBrush");
+            return;
+        }
+
+        _summaryCancellation?.Cancel();
+        _summaryCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource();
+        _summaryCancellation = cancellation;
+        UpdateAiHistoryControls();
+        AiHistoryStatusText.Text = L("GeneratingSummary");
+        AiHistoryStatusText.SetResourceReference(ForegroundProperty, "AppMutedTextBrush");
+        try
+        {
+            var settings = _baseSettings with
+            {
+                AiHistoryEnabled = true,
+                AiHistoryDirectory = directory,
+                AiSummaryRange = ReadSummaryRange(),
+                UiLanguage = _uiLanguage,
+                ProviderId = ProviderComboBox.SelectedValue as string ?? "deepseek",
+                DeepSeekEndpoint = EndpointTextBox.Text.Trim(),
+                DeepSeekModel = ReadComboText(ModelComboBox),
+                DeepSeekApiKey = ApiKeyPasswordBox.Password.Trim(),
+            };
+            var result = await _generateSummary(settings, settings.AiSummaryRange, cancellation.Token);
+            if (_isClosed || cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            AiHistoryStatusText.Text = result.Succeeded
+                ? string.Format(System.Globalization.CultureInfo.CurrentCulture, L("SummaryCreated"), result.RecordCount)
+                : L(result.ErrorCode switch
+                {
+                    "no_records" => "SummaryNoRecords",
+                    "timeout" => "SummaryTimeout",
+                    "provider_failed" => "SummaryProviderFailed",
+                    "directory_unavailable" => "HistoryDirectoryUnavailable",
+                    _ => "SummaryUnavailable",
+                });
+            AiHistoryStatusText.SetResourceReference(
+                ForegroundProperty,
+                result.Succeeded ? "SuccessBrush" : "DangerBrush");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (ReferenceEquals(_summaryCancellation, cancellation))
+            {
+                _summaryCancellation = null;
+            }
+
+            cancellation.Dispose();
+            if (!_isClosed)
+            {
+                UpdateAiHistoryControls();
+            }
+        }
     }
 
     private void ClearTranslationMemoryButton_Click(object sender, RoutedEventArgs e)
@@ -531,6 +765,21 @@ internal partial class SettingsWindow : Window
         PopupVisualStyleComboBox.SelectedIndex = 0;
     }
 
+    private void SelectHighlightPalette(string highlightPalette)
+    {
+        var normalizedPalette = HighlightPaletteCatalog.Normalize(highlightPalette);
+        foreach (var item in HighlightPaletteComboBox.Items.OfType<System.Windows.Controls.ComboBoxItem>())
+        {
+            if (string.Equals(item.Tag as string, normalizedPalette, StringComparison.OrdinalIgnoreCase))
+            {
+                HighlightPaletteComboBox.SelectedItem = item;
+                return;
+            }
+        }
+
+        HighlightPaletteComboBox.SelectedIndex = 0;
+    }
+
     private void ColorThemeComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (IsInitialized)
@@ -544,6 +793,14 @@ internal partial class SettingsWindow : Window
         if (IsInitialized)
         {
             UpdatePopupStylePreview();
+        }
+    }
+
+    private void HighlightPaletteComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (IsInitialized)
+        {
+            UpdateHighlightPalettePreview();
         }
     }
 
@@ -561,7 +818,27 @@ internal partial class SettingsWindow : Window
         CustomAccentColorTextBox.IsEnabled = themeId == ThemeCatalog.CustomThemeId;
         var palette = ThemeCatalog.Resolve(themeId, CustomAccentColorTextBox.Text);
         ThemePreviewBorder.Background = ThemeManager.CreateBrush(palette.Accent);
+        UpdateHighlightPalettePreview();
         UpdatePopupStylePreview();
+    }
+
+    private void UpdateHighlightPalettePreview()
+    {
+        if (HighlightPrimaryPreviewBorder is null
+            || HighlightSecondaryPreviewBorder is null
+            || HighlightTertiaryPreviewBorder is null)
+        {
+            return;
+        }
+
+        var palette = HighlightPaletteCatalog.Resolve(
+            HighlightPaletteComboBox.SelectedValue as string);
+        HighlightPrimaryPreviewBorder.Background = ThemeManager.CreateBrush(palette.PrimaryBackground);
+        HighlightSecondaryPreviewBorder.Background = ThemeManager.CreateBrush(palette.SecondaryBackground);
+        HighlightTertiaryPreviewBorder.Background = ThemeManager.CreateBrush(palette.TertiaryBackground);
+        HighlightPrimaryPreviewText.Foreground = ThemeManager.CreateBrush(palette.PrimaryForeground);
+        HighlightSecondaryPreviewText.Foreground = ThemeManager.CreateBrush(palette.SecondaryForeground);
+        HighlightTertiaryPreviewText.Foreground = ThemeManager.CreateBrush(palette.TertiaryForeground);
     }
 
     private void UpdatePopupStylePreview()

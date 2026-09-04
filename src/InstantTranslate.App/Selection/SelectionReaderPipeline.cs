@@ -7,8 +7,8 @@ internal sealed class SelectionReaderPipeline : IContextualSelectionReader
     private static readonly TimeSpan PrimaryReadTimeout = TimeSpan.FromMilliseconds(800);
     private static readonly TimeSpan[] StabilizedReadRetryDelays =
     [
-        TimeSpan.FromMilliseconds(85),
-        TimeSpan.FromMilliseconds(170),
+        TimeSpan.FromMilliseconds(140),
+        TimeSpan.FromMilliseconds(360),
     ];
     private readonly ISelectionReader _primaryReader;
     private readonly ISelectionReader _fallbackReader;

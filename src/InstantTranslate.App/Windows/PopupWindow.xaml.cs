@@ -59,6 +59,8 @@ internal partial class PopupWindow : Window
     private Paragraph? _translationParagraph;
     private string _renderedTranslation = string.Empty;
     private string _translationRevealTarget = string.Empty;
+    private HighlightedText _translationRevealDocument = HighlightedText.Empty;
+    private HighlightedText _renderedTranslationDocument = HighlightedText.Empty;
     private bool _completeTranslationAfterReveal;
     private bool _replaceTranslationOnNextUpdate;
     private int _copyFeedbackVersion;
@@ -74,9 +76,17 @@ internal partial class PopupWindow : Window
     private Paragraph? _explanationParagraph;
     private string _renderedExplanation = string.Empty;
     private string _explanationRevealTarget = string.Empty;
+    private HighlightedText _explanationRevealDocument = HighlightedText.Empty;
+    private HighlightedText _renderedExplanationDocument = HighlightedText.Empty;
     private string _selectedExplanationText = string.Empty;
     private ExplanationInvocation? _lastExplanationInvocation;
     private bool _isExplanationVisible;
+    private bool _isTranslationComplete;
+    private bool _isExplanationComplete;
+    private bool _isExplanationRecordSaving;
+    private bool _isExplanationRecorded;
+    private string? _explanationRecordErrorCode;
+    private int _explanationRecordVersion;
     private int _selectionActionVersion;
     private bool _isBubbleVisualStyle;
     private bool _isBubbleV2VisualStyle;
@@ -90,9 +100,14 @@ internal partial class PopupWindow : Window
         string popupVisualStyle = PopupVisualStyleCatalog.DefaultStyleId)
     {
         RequestId = requestId;
+        HistorySessionId = Guid.NewGuid();
+        HistoryCreatedAt = DateTimeOffset.Now;
         _englishTranslationFont = CreateFontFamily(englishFontFamily, DefaultEnglishTranslationFontFamily);
         _chineseTranslationFont = CreateFontFamily(chineseFontFamily, DefaultChineseTranslationFontFamily);
         InitializeComponent();
+        SizePresetBar.ConfigureFontSize(12, 34, defaultFontSize);
+        SizePresetBar.PresetSelected += SizePresetBar_PresetSelected;
+        SizePresetBar.FontSizeChanged += SizePresetBar_FontSizeChanged;
         _translationRevealTimer = new DispatcherTimer(DispatcherPriority.Render, Dispatcher)
         {
             Interval = StreamingRevealInterval,
@@ -105,12 +120,16 @@ internal partial class PopupWindow : Window
         _explanationRevealTimer.Tick += ExplanationRevealTimer_Tick;
         ApplyVisualStyle(popupVisualStyle);
         TranslationRichTextBox.FontFamily = _englishTranslationFont;
-        FontSizeSlider.Value = Math.Clamp(defaultFontSize, FontSizeSlider.Minimum, FontSizeSlider.Maximum);
+        ApplyTranslationFontSize(SizePresetBar.FontSizeValue);
         ApplyUiLanguage(uiLanguage);
         SourceInitialized += OnSourceInitialized;
     }
 
     public long RequestId { get; }
+
+    public Guid HistorySessionId { get; }
+
+    public DateTimeOffset HistoryCreatedAt { get; }
 
     public bool IsPinned { get; private set; }
 
@@ -127,6 +146,15 @@ internal partial class PopupWindow : Window
     public string CurrentTargetLanguage => _targetLanguage;
 
     public string CurrentTranslationText => _translatedText;
+
+    public string CurrentExplanationText => _explanationText;
+
+    public string CurrentExplanationSubjectText => _lastExplanationInvocation?.SubjectText ?? string.Empty;
+
+    public ExplanationScope CurrentExplanationScope =>
+        _lastExplanationInvocation?.Scope ?? ExplanationScope.SourceText;
+
+    public string UiLanguage => _uiLanguage;
 
     public ScreenPoint AnchorPoint => _anchorPoint;
 
@@ -148,6 +176,12 @@ internal partial class PopupWindow : Window
 
     public event Action<PopupWindow>? ExplanationDismissed;
 
+    public event Action<PopupWindow, string, QuestionContextKind>? QuestionSubmitted;
+
+    public event Action<PopupWindow>? DeepSeekChatRequested;
+
+    internal event Action<PopupWindow>? ManualExplanationRecordRequested;
+
     public void ApplyUiLanguage(string? uiLanguage)
     {
         _uiLanguage = string.Equals(uiLanguage, "zh-CN", StringComparison.OrdinalIgnoreCase)
@@ -155,11 +189,16 @@ internal partial class PopupWindow : Window
             ? "zh-CN"
             : "en";
 
-        FontSizeButton.ToolTip = Localize("Text size", "文字大小");
-        FontSizePanel.ToolTip = Localize("Drag to adjust text size", "拖动调节字体大小");
+        DragHandle.ToolTip = Localize("Drag to move", "拖动移动窗口");
+        SizePresetBar.ApplyUiLanguage(_uiLanguage);
+        System.Windows.Automation.AutomationProperties.SetName(
+            DragHandle,
+            Localize("Drag window", "拖动窗口"));
         DirectionButton.ToolTip = Localize("Switch translation language", "切换翻译语言");
         ExplainButton.Content = Localize("Explain", "解释");
         ExplainButton.ToolTip = Localize("Explain source text", "解释原文");
+        CodeAnalysisButton.Content = Localize("Code", "代码");
+        CodeAnalysisButton.ToolTip = Localize("Analyze selected code", "分析所选代码");
         SelectionExplainButton.Content = Localize("Explain", "解释");
         SelectionExplainButton.ToolTip = Localize("Explain selected translation", "解释所选译文");
         CopySourceButton.Content = Localize("Source", "原文");
@@ -173,26 +212,35 @@ internal partial class PopupWindow : Window
             ? Localize("Release window", "取消保留")
             : Localize("Keep window", "保留此窗口");
         CloseButton.ToolTip = Localize("Close", "关闭");
-        ExplanationTitleText.Text = Localize("AI Explain", "AI 解释");
+        ExplanationTitleText.Text = GetExplanationTitle();
         ExplanationCopyButton.Content = Localize("Copy", "复制");
         ExplanationCopyButton.ToolTip = Localize("Copy explanation", "复制解释");
+        UpdateExplanationRecordButton();
         ExplanationRetryButton.Content = Localize("Retry", "重试");
         ExplanationRetryButton.ToolTip = Localize("Retry explanation", "重新解释");
         ExplanationBackButton.Content = Localize("Back", "返回");
         ExplanationBackButton.ToolTip = Localize("Back to translation", "返回译文");
+        InlineAskButton.Content = Localize("Ask", "提问");
+        InlineQuestionPlaceholder.Text = Localize("Ask about this…", "对此提问…");
+        InlineQuestionTextBox.ToolTip = Localize(
+            "Ask directly; Enter sends, Shift+Enter adds a line",
+            "直接提问；Enter 发送，Shift+Enter 换行");
+        DeepSeekChatButton.ToolTip = Localize(
+            "Open DeepSeek quick chat",
+            "打开 DeepSeek 快速聊天");
         CopySelectionMenuItem.Header = Localize("Copy", "复制");
         SelectAllMenuItem.Header = Localize("Select all", "全选");
         CopyExplanationSelectionMenuItem.Header = Localize("Copy", "复制");
         SelectAllExplanationMenuItem.Header = Localize("Select all", "全选");
-        System.Windows.Automation.AutomationProperties.SetName(
-            FontSizeButton,
-            Localize("Text size", "文字大小"));
         System.Windows.Automation.AutomationProperties.SetName(
             DirectionButton,
             Localize("Switch translation language", "切换翻译语言"));
         System.Windows.Automation.AutomationProperties.SetName(
             ExplainButton,
             Localize("Explain source text", "解释原文"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            CodeAnalysisButton,
+            Localize("Analyze selected code", "分析所选代码"));
         System.Windows.Automation.AutomationProperties.SetName(
             SelectionExplainButton,
             Localize("Explain selected translation", "解释所选译文"));
@@ -217,11 +265,23 @@ internal partial class PopupWindow : Window
             ExplanationCopyButton,
             Localize("Copy explanation", "复制解释"));
         System.Windows.Automation.AutomationProperties.SetName(
+            ExplanationRecordButton,
+            Localize("Record explanation", "记录解释"));
+        System.Windows.Automation.AutomationProperties.SetName(
             ExplanationRetryButton,
             Localize("Retry explanation", "重新解释"));
         System.Windows.Automation.AutomationProperties.SetName(
             ExplanationBackButton,
             Localize("Back to translation", "返回译文"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            InlineQuestionTextBox,
+            Localize("Ask AI about this content", "向 AI 提问当前内容"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            InlineAskButton,
+            Localize("Send question", "发送问题"));
+        System.Windows.Automation.AutomationProperties.SetName(
+            DeepSeekChatButton,
+            Localize("Open DeepSeek quick chat", "打开 DeepSeek 快速聊天"));
 
         UpdateDirectionButtonText();
         UpdateBodyMessageText();
@@ -248,8 +308,14 @@ internal partial class PopupWindow : Window
             var completeAfterAppearanceUpdate = _completeTranslationAfterReveal;
             StopTranslationReveal(clearTarget: false);
             _translationRevealTarget = _translatedText;
+            if (!string.Equals(_translationRevealDocument.PlainText, _translatedText, StringComparison.Ordinal))
+            {
+                _translationRevealDocument = HighlightMarkup.EnsureEmphasis(
+                    HighlightedText.FromPlainText(_translatedText));
+            }
             _translationParagraph = null;
             _renderedTranslation = string.Empty;
+            _renderedTranslationDocument = HighlightedText.Empty;
             SetTranslationText(_translatedText);
             if (completeAfterAppearanceUpdate)
             {
@@ -261,8 +327,14 @@ internal partial class PopupWindow : Window
         {
             StopExplanationReveal(clearTarget: false);
             _explanationRevealTarget = _explanationText;
+            if (!string.Equals(_explanationRevealDocument.PlainText, _explanationText, StringComparison.Ordinal))
+            {
+                _explanationRevealDocument = HighlightMarkup.EnsureEmphasis(
+                    HighlightedText.FromPlainText(_explanationText));
+            }
             _explanationParagraph = null;
             _renderedExplanation = string.Empty;
+            _renderedExplanationDocument = HighlightedText.Empty;
             SetExplanationText(_explanationText);
         }
 
@@ -292,8 +364,8 @@ internal partial class PopupWindow : Window
                 CurrentBubbleVerticalInset)
             : new Thickness(0);
         PopupSurface.Padding = _isBubbleV2VisualStyle
-            ? new Thickness(17, 15, 17, 15)
-            : new Thickness(16, 14, 16, 14);
+            ? new Thickness(17, 6, 17, 15)
+            : new Thickness(16, 6, 16, 14);
         BubbleHighlight.Visibility = _isBubbleVisualStyle ? Visibility.Visible : Visibility.Collapsed;
         ConfigureBubbleTailGeometry();
         UpdateBubbleTailDirection(windowIsLeftOfAnchor: false);
@@ -369,7 +441,7 @@ internal partial class PopupWindow : Window
         EnterManualSizeMode(updateLayout: true);
         Width = Math.Max(MinWidth, width);
         Height = Math.Max(MinHeight, height);
-        FontSizeSlider.Value = Math.Clamp(fontSize, FontSizeSlider.Minimum, FontSizeSlider.Maximum);
+        SizePresetBar.FontSizeValue = fontSize;
         UpdateLayout();
     }
 
@@ -384,12 +456,56 @@ internal partial class PopupWindow : Window
     internal bool HasSelectionExplainButtonForVisualTest() =>
         SelectionExplainButton.Visibility == Visibility.Visible;
 
+    internal bool IsCodeAnalysisEnabledForVisualTest() => CodeAnalysisButton.IsEnabled;
+
+    internal void StartCodeAnalysisForVisualTest()
+    {
+        if (!HasTranslation)
+        {
+            return;
+        }
+
+        _lastExplanationInvocation = new ExplanationInvocation(
+            _currentTranslationSourceText,
+            ExplanationScope.CodeAnalysis);
+        ShowExplanationLoading();
+    }
+
+    internal bool IsCodeAnalysisPresentationForVisualTest() =>
+        IsCodeAnalysisActive
+        && string.Equals(ExplanationTitleText.Text, "Code Analysis", StringComparison.Ordinal);
+
     internal bool IsExplanationVisibleForVisualTest() =>
         _isExplanationVisible && ExplanationOverlay.Visibility == Visibility.Visible;
 
     internal bool IsBubbleVisualStyleForVisualTest() => _isBubbleVisualStyle;
 
     internal bool IsBubbleV2VisualStyleForVisualTest() => _isBubbleV2VisualStyle;
+
+    internal bool HasUsableDragHandleForVisualTest()
+    {
+        UpdateLayout();
+        return DragHandle.IsHitTestVisible
+               && DragHandle.ActualWidth >= 160
+               && DragHandle.ActualHeight >= 28;
+    }
+
+    internal void ApplySizePresetForVisualTest(WindowSizePreset preset) => ApplySizePreset(preset);
+
+    internal bool HasDirectFontSizeSliderForVisualTest() =>
+        SizePresetBar.HasDirectFontSizeSliderForVisualTest();
+
+    internal bool HasSingleRowExternalControlsForVisualTest() =>
+        SizePresetBar.HasSingleRowLayoutForVisualTest()
+        && HeaderBarGrid.DesiredSize.Width <= ActualWidth + 0.5;
+
+    internal void SetFontSizeForVisualTest(double value) => SizePresetBar.FontSizeValue = value;
+
+    internal double TranslationFontSizeForVisualTest => TranslationRichTextBox.FontSize;
+
+    internal bool HasContentHighlightsForVisualTest() =>
+        HighlightedTextRenderer.HasHighlightRuns(_translationParagraph)
+        || HighlightedTextRenderer.HasHighlightRuns(_explanationParagraph);
 
     internal bool HasVerticalOverflowForVisualTest()
     {
@@ -429,6 +545,9 @@ internal partial class PopupWindow : Window
         CopyTranslationButton.IsEnabled = false;
         EditTranslationButton.IsEnabled = false;
         ExplainButton.IsEnabled = false;
+        CodeAnalysisButton.IsEnabled = false;
+        _isTranslationComplete = false;
+        UpdateQuestionBarState();
         if (_hasDisplayedTranslation)
         {
             ShowAt(anchorPoint);
@@ -443,19 +562,21 @@ internal partial class PopupWindow : Window
         string sourceLanguage = "自动检测")
     {
         HideSelectionExplainButton();
+        var highlightedTranslation = HighlightMarkup.EnsureEmphasis(HighlightMarkup.Parse(translatedText));
+        var plainTranslation = highlightedTranslation.PlainText;
         var startsNewTranslation = !_hasDisplayedTranslation
             || _replaceTranslationOnNextUpdate
             || !string.Equals(_currentTranslationSourceText, sourceText, StringComparison.Ordinal)
             || !string.Equals(_targetLanguage, targetLanguage, StringComparison.Ordinal)
             || (_translationRevealTarget.Length > 0
-                && !translatedText.StartsWith(_translationRevealTarget, StringComparison.Ordinal));
+                && !plainTranslation.StartsWith(_translationRevealTarget, StringComparison.Ordinal));
         if (string.IsNullOrEmpty(_sourceText))
         {
             _sourceText = sourceText;
         }
         _currentTranslationSourceText = sourceText;
         _currentSourceLanguage = sourceLanguage;
-        _translatedText = translatedText;
+        _translatedText = plainTranslation;
         _targetLanguage = targetLanguage;
         _anchorPoint = anchorPoint;
         _replaceTranslationOnNextUpdate = false;
@@ -467,7 +588,7 @@ internal partial class PopupWindow : Window
             _lastAutomaticSizeTextLength = 0;
         }
 
-        QueueTranslationReveal(translatedText, resetVisibleText: startsNewTranslation);
+        QueueTranslationReveal(highlightedTranslation, resetVisibleText: startsNewTranslation);
         UpdateDirectionButtonText();
         LoadingPanel.Visibility = Visibility.Collapsed;
         SetActionBarVisibility(Visibility.Visible);
@@ -476,10 +597,13 @@ internal partial class PopupWindow : Window
         CopyTranslationButton.IsEnabled = true;
         EditTranslationButton.IsEnabled = false;
         ExplainButton.IsEnabled = false;
+        CodeAnalysisButton.IsEnabled = false;
+        _isTranslationComplete = false;
+        UpdateQuestionBarState();
         TranslationRichTextBox.Visibility = Visibility.Visible;
         HideActionStatus();
         _hasDisplayedTranslation = true;
-        ApplyAutomaticSize(translatedText, anchorPoint, force: isFirstTranslationUpdate);
+        ApplyAutomaticSize(plainTranslation, anchorPoint, force: isFirstTranslationUpdate);
         if (isFirstTranslationUpdate || !IsVisible)
         {
             ShowAt(anchorPoint);
@@ -519,7 +643,11 @@ internal partial class PopupWindow : Window
             CopyTranslationButton.IsEnabled = true;
             EditTranslationButton.IsEnabled = true;
             ExplainButton.IsEnabled = true;
+            CodeAnalysisButton.IsEnabled = true;
         }
+
+        _isTranslationComplete = HasTranslation;
+        UpdateQuestionBarState();
     }
 
     public void RestoreTranslationAfterFailure()
@@ -536,8 +664,11 @@ internal partial class PopupWindow : Window
         _targetLanguage = completed.TargetLanguage;
         StopTranslationReveal(clearTarget: true);
         _translationRevealTarget = _translatedText;
+        _translationRevealDocument = HighlightMarkup.EnsureEmphasis(
+            HighlightedText.FromPlainText(_translatedText));
         _translationParagraph = null;
         _renderedTranslation = string.Empty;
+        _renderedTranslationDocument = HighlightedText.Empty;
         SetTranslationText(_translatedText);
         UpdateDirectionButtonText();
 
@@ -548,6 +679,9 @@ internal partial class PopupWindow : Window
         CopyTranslationButton.IsEnabled = true;
         EditTranslationButton.IsEnabled = true;
         ExplainButton.IsEnabled = true;
+        CodeAnalysisButton.IsEnabled = true;
+        _isTranslationComplete = true;
+        UpdateQuestionBarState();
         TranslationRichTextBox.Visibility = Visibility.Visible;
         ShowActionStatus(ActionMessageKind.TranslationFailedPreserved);
     }
@@ -568,6 +702,9 @@ internal partial class PopupWindow : Window
         CopyTranslationButton.IsEnabled = false;
         EditTranslationButton.IsEnabled = false;
         ExplainButton.IsEnabled = false;
+        CodeAnalysisButton.IsEnabled = false;
+        _isTranslationComplete = false;
+        UpdateQuestionBarState();
         LoadingPanel.Visibility = Visibility.Visible;
         ShowAt(_anchorPoint);
     }
@@ -586,20 +723,32 @@ internal partial class PopupWindow : Window
             SchedulePositionNearAnchor();
         }
         _isExplanationVisible = true;
+        _isExplanationComplete = false;
+        _explanationRecordVersion++;
+        _isExplanationRecordSaving = false;
+        _isExplanationRecorded = false;
+        _explanationRecordErrorCode = null;
         _explanationText = string.Empty;
         StopExplanationReveal(clearTarget: true);
+        _explanationRevealDocument = HighlightedText.Empty;
         _explanationParagraph = null;
         _renderedExplanation = string.Empty;
+        _renderedExplanationDocument = HighlightedText.Empty;
         HideSelectionExplainButton();
         ExplanationOverlay.Visibility = Visibility.Visible;
-        ExplanationStatusText.Text = Localize("Analyzing…", "正在分析…");
+        ExplanationTitleText.Text = GetExplanationTitle();
+        ExplanationStatusText.Text = GetExplanationLoadingText();
         ExplanationStatusText.Visibility = Visibility.Visible;
         ExplanationRichTextBox.Document.Blocks.Clear();
         ExplanationRichTextBox.Visibility = Visibility.Collapsed;
         ExplanationCopyButton.IsEnabled = false;
+        UpdateExplanationRecordButton();
         ExplanationRetryButton.Visibility = Visibility.Collapsed;
-        ExplainButton.Tag = "Selected";
+        ExplainButton.Tag = IsCodeAnalysisActive ? null : "Selected";
+        CodeAnalysisButton.Tag = IsCodeAnalysisActive ? "Selected" : null;
         ExplainButton.IsEnabled = false;
+        CodeAnalysisButton.IsEnabled = false;
+        UpdateQuestionBarState();
     }
 
     public void ShowExplanation(string explanation)
@@ -609,14 +758,28 @@ internal partial class PopupWindow : Window
             return;
         }
 
+        var highlightedExplanation = HighlightMarkup.EnsureEmphasis(HighlightMarkup.Parse(explanation));
+        var plainExplanation = highlightedExplanation.PlainText;
         var startsNewExplanation = _explanationRevealTarget.Length == 0
-            || !explanation.StartsWith(_explanationRevealTarget, StringComparison.Ordinal);
-        _explanationText = explanation;
-        QueueExplanationReveal(explanation, resetVisibleText: startsNewExplanation);
+            || !plainExplanation.StartsWith(_explanationRevealTarget, StringComparison.Ordinal);
+        _explanationText = plainExplanation;
+        QueueExplanationReveal(highlightedExplanation, resetVisibleText: startsNewExplanation);
         ExplanationStatusText.Visibility = Visibility.Collapsed;
         ExplanationRichTextBox.Visibility = Visibility.Visible;
-        ExplanationCopyButton.IsEnabled = !string.IsNullOrWhiteSpace(explanation);
+        ExplanationCopyButton.IsEnabled = !string.IsNullOrWhiteSpace(plainExplanation);
         ExplanationRetryButton.Visibility = Visibility.Collapsed;
+    }
+
+    public void MarkExplanationComplete()
+    {
+        if (!_isExplanationVisible || string.IsNullOrWhiteSpace(_explanationText))
+        {
+            return;
+        }
+
+        _isExplanationComplete = true;
+        UpdateExplanationRecordButton();
+        UpdateQuestionBarState();
     }
 
     public void ShowExplanationFailure(string message)
@@ -626,24 +789,35 @@ internal partial class PopupWindow : Window
             return;
         }
 
+        _explanationRecordVersion++;
         _explanationText = string.Empty;
         StopExplanationReveal(clearTarget: true);
+        _explanationRevealDocument = HighlightedText.Empty;
         _explanationParagraph = null;
         _renderedExplanation = string.Empty;
+        _renderedExplanationDocument = HighlightedText.Empty;
         ExplanationRichTextBox.Document.Blocks.Clear();
         ExplanationRichTextBox.Visibility = Visibility.Collapsed;
         ExplanationStatusText.Text = message;
         ExplanationStatusText.Visibility = Visibility.Visible;
         ExplanationCopyButton.IsEnabled = false;
+        _isExplanationRecordSaving = false;
+        _isExplanationRecorded = false;
+        _explanationRecordErrorCode = null;
+        UpdateExplanationRecordButton();
         ExplanationRetryButton.Visibility = _lastExplanationInvocation is null
             ? Visibility.Collapsed
             : Visibility.Visible;
+        _isExplanationComplete = false;
+        UpdateQuestionBarState();
     }
 
     public void HideExplanation(bool notifyDismissed)
     {
         var wasVisible = _isExplanationVisible || ExplanationOverlay.Visibility == Visibility.Visible;
         _isExplanationVisible = false;
+        _isExplanationComplete = false;
+        _explanationRecordVersion++;
         _explanationText = string.Empty;
         StopExplanationReveal(clearTarget: true);
         _explanationParagraph = null;
@@ -653,9 +827,16 @@ internal partial class PopupWindow : Window
         ExplanationRichTextBox.Document.Blocks.Clear();
         ExplanationRichTextBox.Visibility = Visibility.Collapsed;
         ExplanationCopyButton.IsEnabled = false;
+        _isExplanationRecordSaving = false;
+        _isExplanationRecorded = false;
+        _explanationRecordErrorCode = null;
+        UpdateExplanationRecordButton();
         ExplanationRetryButton.Visibility = Visibility.Collapsed;
         ExplainButton.Tag = null;
+        CodeAnalysisButton.Tag = null;
         ExplainButton.IsEnabled = HasTranslation && !_isEditingTranslation;
+        CodeAnalysisButton.IsEnabled = HasTranslation && !_isEditingTranslation;
+        UpdateQuestionBarState();
 
         if (wasVisible && notifyDismissed)
         {
@@ -684,12 +865,19 @@ internal partial class PopupWindow : Window
             _hwndSource = null;
         }
 
+        SizePresetBar.PresetSelected -= SizePresetBar_PresetSelected;
+        SizePresetBar.FontSizeChanged -= SizePresetBar_FontSizeChanged;
+
         TranslationRichTextBox.Document.Blocks.Clear();
         ExplanationRichTextBox.Document.Blocks.Clear();
         _translationParagraph = null;
         _renderedTranslation = string.Empty;
+        _translationRevealDocument = HighlightedText.Empty;
+        _renderedTranslationDocument = HighlightedText.Empty;
         _explanationParagraph = null;
         _renderedExplanation = string.Empty;
+        _explanationRevealDocument = HighlightedText.Empty;
+        _renderedExplanationDocument = HighlightedText.Empty;
         _sourceText = string.Empty;
         _currentTranslationSourceText = string.Empty;
         _currentSourceLanguage = "自动检测";
@@ -763,17 +951,38 @@ internal partial class PopupWindow : Window
 
     private IntPtr WindowProcedure(IntPtr windowHandle, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (message == NativeMethods.WmSetCursor && IsVisible)
+        {
+            var hitTest = (int)unchecked((short)(lParam.ToInt64() & 0xffff));
+            // A child control can report HTCLIENT for a few pixels next to the
+            // edge. Re-resolve from the physical cursor position so the resize
+            // cursor remains visible over the RichTextBox and other children.
+            if (!IsResizeHitTest(hitTest))
+            {
+                hitTest = ResolveResizeHitTestAtCursor(windowHandle);
+            }
+
+            if (IsResizeHitTest(hitTest))
+            {
+                var cursor = NativeMethods.LoadCursor(
+                    IntPtr.Zero,
+                    GetResizeCursorId(hitTest));
+                if (cursor != IntPtr.Zero)
+                {
+                    NativeMethods.SetCursor(cursor);
+                    handled = true;
+                    return new IntPtr(1);
+                }
+            }
+        }
+
         if (message == NativeMethods.WmNcHitTest
             && IsVisible
             && NativeMethods.GetWindowRect(windowHandle, out var bounds))
         {
-            var dpi = VisualTreeHelper.GetDpi(this);
-            var edgeThickness = Math.Max(10, (int)Math.Ceiling(10 * Math.Max(dpi.DpiScaleX, dpi.DpiScaleY)));
-            var hitTest = PopupResizeHitTest.ResolveWithInsetTop(
+            var hitTest = ResolveResizeHitTest(
                 bounds,
-                GetPopupSurfaceTop(bounds),
-                PopupResizeHitTest.DecodeScreenPoint(lParam),
-                edgeThickness);
+                PopupResizeHitTest.DecodeScreenPoint(lParam));
             if (hitTest != 0)
             {
                 EnterManualSizeMode(updateLayout: false);
@@ -783,6 +992,58 @@ internal partial class PopupWindow : Window
         }
 
         return IntPtr.Zero;
+    }
+
+    private int ResolveResizeHitTestAtCursor(IntPtr windowHandle)
+    {
+        if (!NativeMethods.GetWindowRect(windowHandle, out var bounds)
+            || !NativeMethods.GetCursorPos(out var cursor))
+        {
+            return 0;
+        }
+
+        return ResolveResizeHitTest(bounds, cursor.ToScreenPoint());
+    }
+
+    private int ResolveResizeHitTest(
+        NativeMethods.NativeRect bounds,
+        ScreenPoint point)
+    {
+        var dpi = VisualTreeHelper.GetDpi(this);
+        // A generous physical hit target keeps resizing usable at 125–200%
+        // DPI and on rounded surfaces whose visible edge is easy to miss.
+        var edgeThickness = Math.Max(
+            16,
+            (int)Math.Ceiling(16 * Math.Max(dpi.DpiScaleX, dpi.DpiScaleY)));
+        return PopupResizeHitTest.ResolveWithInsetTop(
+            bounds,
+            GetPopupSurfaceTop(bounds),
+            point,
+            edgeThickness);
+    }
+
+    private static bool IsResizeHitTest(int hitTest)
+    {
+        return hitTest is NativeMethods.HtLeft
+            or NativeMethods.HtRight
+            or NativeMethods.HtTop
+            or NativeMethods.HtBottom
+            or NativeMethods.HtTopLeft
+            or NativeMethods.HtTopRight
+            or NativeMethods.HtBottomLeft
+            or NativeMethods.HtBottomRight;
+    }
+
+    private static IntPtr GetResizeCursorId(int hitTest)
+    {
+        return hitTest switch
+        {
+            NativeMethods.HtLeft or NativeMethods.HtRight => NativeMethods.CursorSizeWe,
+            NativeMethods.HtTop or NativeMethods.HtBottom => NativeMethods.CursorSizeNs,
+            NativeMethods.HtTopLeft or NativeMethods.HtBottomRight => NativeMethods.CursorSizeNwse,
+            NativeMethods.HtTopRight or NativeMethods.HtBottomLeft => NativeMethods.CursorSizeNesw,
+            _ => IntPtr.Zero,
+        };
     }
 
     private int GetPopupSurfaceTop(NativeMethods.NativeRect windowBounds)
@@ -848,6 +1109,13 @@ internal partial class PopupWindow : Window
             _currentTranslationSourceText);
     }
 
+    private void CodeAnalysisButton_Click(object sender, RoutedEventArgs e)
+    {
+        RequestExplanation(
+            ExplanationScope.CodeAnalysis,
+            _currentTranslationSourceText);
+    }
+
     private void SelectionExplainButton_Click(object sender, RoutedEventArgs e)
     {
         RequestExplanation(
@@ -861,6 +1129,121 @@ internal partial class PopupWindow : Window
         await CopyWithFeedbackAsync(
             ExplanationCopyButton,
             string.IsNullOrWhiteSpace(selectedText) ? _explanationText : selectedText);
+    }
+
+    private void ExplanationRecordButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_isExplanationComplete
+            || _isExplanationRecordSaving
+            || _isExplanationRecorded
+            || string.IsNullOrWhiteSpace(_explanationText))
+        {
+            return;
+        }
+
+        if (ManualExplanationRecordRequested is { } requested)
+        {
+            requested(this);
+            return;
+        }
+
+        MarkExplanationRecordFailed("unavailable");
+    }
+
+    internal int BeginExplanationRecordSave()
+    {
+        if (!_isExplanationComplete || string.IsNullOrWhiteSpace(_explanationText))
+        {
+            return 0;
+        }
+
+        _explanationRecordVersion++;
+        _isExplanationRecordSaving = true;
+        _explanationRecordErrorCode = null;
+        UpdateExplanationRecordButton();
+        return _explanationRecordVersion;
+    }
+
+    internal void MarkExplanationRecorded(int version)
+    {
+        if (version != _explanationRecordVersion)
+        {
+            return;
+        }
+
+        _isExplanationRecordSaving = false;
+        _isExplanationRecorded = true;
+        _explanationRecordErrorCode = null;
+        UpdateExplanationRecordButton();
+    }
+
+    internal void MarkExplanationRecordFailed(string? errorCode, int version = 0)
+    {
+        if (version != 0 && version != _explanationRecordVersion)
+        {
+            return;
+        }
+
+        _isExplanationRecordSaving = false;
+        _isExplanationRecorded = false;
+        _explanationRecordErrorCode = errorCode;
+        UpdateExplanationRecordButton();
+    }
+
+    internal bool HasExplanationRecordButtonForVisualTest() =>
+        ExplanationRecordButton.Visibility == Visibility.Visible;
+
+    internal bool IsExplanationRecordEnabledForVisualTest() => ExplanationRecordButton.IsEnabled;
+
+    private void UpdateExplanationRecordButton()
+    {
+        if (ExplanationRecordButton is null)
+        {
+            return;
+        }
+
+        if (_isExplanationRecordSaving)
+        {
+            ExplanationRecordButton.Content = Localize("Saving…", "保存中…");
+            ExplanationRecordButton.ToolTip = Localize(
+                "Saving to today's Markdown record",
+                "正在保存到今天的 Markdown 记录");
+        }
+        else if (_isExplanationRecorded)
+        {
+            ExplanationRecordButton.Content = Localize("Saved", "已保存");
+            ExplanationRecordButton.ToolTip = Localize(
+                "This explanation is recorded",
+                "本次解释已记录");
+        }
+        else if (_explanationRecordErrorCode is not null)
+        {
+            ExplanationRecordButton.Content = Localize("Retry", "重试");
+            ExplanationRecordButton.ToolTip = _explanationRecordErrorCode switch
+            {
+                "directory_required" => Localize(
+                    "Choose a save folder in Settings, then retry",
+                    "请先在设置中选择保存目录，然后重试"),
+                "schema_conflict" => Localize(
+                    "Today's file is not an InstantTranslate record; move or rename it, then retry",
+                    "今天的文件不是 InstantTranslate 记录，请移动或重命名后重试"),
+                _ => Localize(
+                    "Could not save the record. Check the folder and retry",
+                    "记录保存失败，请检查目录后重试"),
+            };
+        }
+        else
+        {
+            ExplanationRecordButton.Content = Localize("Record", "记录");
+            ExplanationRecordButton.ToolTip = Localize(
+                "Save this explanation to today's Markdown record",
+                "将本次解释保存到今天的 Markdown 记录");
+        }
+
+        ExplanationRecordButton.IsEnabled = _isExplanationComplete
+                                            && !string.IsNullOrWhiteSpace(_explanationText)
+                                            && !_isExplanationRecordSaving
+                                            && !_isExplanationRecorded;
     }
 
     private void ExplanationRetryButton_Click(object sender, RoutedEventArgs e)
@@ -878,13 +1261,6 @@ internal partial class PopupWindow : Window
         HideExplanation(notifyDismissed: true);
     }
 
-    private void FontSizeButton_Click(object sender, RoutedEventArgs e)
-    {
-        var isExpanded = FontSizePanel.Visibility == Visibility.Visible;
-        FontSizePanel.Visibility = isExpanded ? Visibility.Collapsed : Visibility.Visible;
-        FontSizeButton.Tag = isExpanded ? null : "Selected";
-    }
-
     private void PinButton_Click(object sender, RoutedEventArgs e)
     {
         if (IsPinned)
@@ -895,7 +1271,6 @@ internal partial class PopupWindow : Window
             System.Windows.Automation.AutomationProperties.SetName(
                 PinButton,
                 Localize("Keep window", "保留此窗口"));
-            PopupSurface.Cursor = System.Windows.Input.Cursors.Arrow;
             PinStateChanged?.Invoke(this, false);
             return;
         }
@@ -907,7 +1282,6 @@ internal partial class PopupWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(
             PinButton,
             Localize("Release window", "取消保留"));
-        PopupSurface.Cursor = System.Windows.Input.Cursors.SizeAll;
         PinStateChanged?.Invoke(this, true);
     }
 
@@ -962,12 +1336,16 @@ internal partial class PopupWindow : Window
         }
         else if (e.Key is Key.OemPlus or Key.Add)
         {
-            FontSizeSlider.Value = Math.Min(FontSizeSlider.Maximum, FontSizeSlider.Value + 0.5);
+            SizePresetBar.FontSizeValue = Math.Min(
+                SizePresetBar.MaximumFontSize,
+                SizePresetBar.FontSizeValue + 0.5);
             e.Handled = true;
         }
         else if (e.Key is Key.OemMinus or Key.Subtract)
         {
-            FontSizeSlider.Value = Math.Max(FontSizeSlider.Minimum, FontSizeSlider.Value - 0.5);
+            SizePresetBar.FontSizeValue = Math.Max(
+                SizePresetBar.MinimumFontSize,
+                SizePresetBar.FontSizeValue - 0.5);
             e.Handled = true;
         }
     }
@@ -982,6 +1360,7 @@ internal partial class PopupWindow : Window
         HideExplanation(notifyDismissed: true);
         _translationBeforeEdit = _translatedText;
         _isEditingTranslation = true;
+        UpdateQuestionBarState();
         TranslationRichTextBox.IsReadOnly = false;
         TranslationRichTextBox.IsUndoEnabled = true;
         DirectionButton.IsEnabled = false;
@@ -1061,10 +1440,16 @@ internal partial class PopupWindow : Window
             _targetLanguage);
         StopTranslationReveal(clearTarget: true);
         _translationRevealTarget = translation;
+        _translationRevealDocument = HighlightMarkup.EnsureEmphasis(
+            HighlightedText.FromPlainText(translation));
         _translationParagraph = null;
         _renderedTranslation = string.Empty;
+        _renderedTranslationDocument = HighlightedText.Empty;
         SetTranslationText(translation);
         ExplainButton.IsEnabled = HasTranslation;
+        CodeAnalysisButton.IsEnabled = HasTranslation;
+        _isTranslationComplete = HasTranslation;
+        UpdateQuestionBarState();
         ApplyUiLanguage(_uiLanguage);
     }
 
@@ -1091,9 +1476,88 @@ internal partial class PopupWindow : Window
             return;
         }
 
-        ShowExplanationFailure(Localize(
-            "AI Explain is unavailable. Try again.",
-            "AI 解释暂不可用，请重试。"));
+        ShowExplanationFailure(scope == ExplanationScope.CodeAnalysis
+            ? Localize("Code analysis is unavailable. Try again.", "代码分析暂不可用，请重试。")
+            : Localize("AI Explain is unavailable. Try again.", "AI 解释暂不可用，请重试。"));
+    }
+
+    private bool IsCodeAnalysisActive =>
+        _lastExplanationInvocation?.Scope == ExplanationScope.CodeAnalysis;
+
+    private string GetExplanationTitle() => IsCodeAnalysisActive
+        ? Localize("Code Analysis", "代码分析")
+        : Localize("AI Explain", "AI 解释");
+
+    private string GetExplanationLoadingText() => IsCodeAnalysisActive
+        ? Localize("Analyzing code…", "正在分析代码…")
+        : Localize("Analyzing…", "正在分析…");
+
+    private void UpdateQuestionBarState()
+    {
+        if (QuestionBar is null || InlineQuestionTextBox is null || InlineAskButton is null)
+        {
+            return;
+        }
+
+        var isVisible = HasTranslation && _isTranslationComplete && !_isEditingTranslation;
+        QuestionBar.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
+        var isEnabled = isVisible && (!_isExplanationVisible || _isExplanationComplete);
+        InlineQuestionTextBox.IsEnabled = isEnabled;
+        InlineAskButton.IsEnabled = isEnabled;
+    }
+
+    private void SubmitInlineQuestion()
+    {
+        if (!InlineQuestionTextBox.IsEnabled)
+        {
+            return;
+        }
+
+        var question = TextNormalizer.Normalize(InlineQuestionTextBox.Text);
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            return;
+        }
+
+        const int maximumQuestionCharacters = 2000;
+        if (question.Length > maximumQuestionCharacters)
+        {
+            question = question[..maximumQuestionCharacters];
+        }
+
+        InlineQuestionTextBox.Clear();
+        var contextKind = _isExplanationVisible && _isExplanationComplete
+            ? QuestionContextKind.Explanation
+            : QuestionContextKind.Translation;
+        QuestionSubmitted?.Invoke(this, question, contextKind);
+    }
+
+    private void InlineAskButton_Click(object sender, RoutedEventArgs e) => SubmitInlineQuestion();
+
+    private void DeepSeekChatButton_Click(object sender, RoutedEventArgs e)
+    {
+        DeepSeekChatRequested?.Invoke(this);
+    }
+
+    private void InlineQuestionTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (InlineQuestionPlaceholder is not null)
+        {
+            InlineQuestionPlaceholder.Visibility = string.IsNullOrEmpty(InlineQuestionTextBox.Text)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+    }
+
+    private void InlineQuestionTextBox_PreviewKeyDown(
+        object sender,
+        System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
+        {
+            e.Handled = true;
+            SubmitInlineQuestion();
+        }
     }
 
     private void TranslationRichTextBox_SelectionChanged(object sender, RoutedEventArgs e)
@@ -1187,19 +1651,20 @@ internal partial class PopupWindow : Window
         }
     }
 
-    private void PopupSurface_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private void DragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (!IsPinned
-            || e.ChangedButton != MouseButton.Left
-            || TranslationRichTextBox.IsMouseOver
-            || ExplanationOverlay.IsMouseOver
-            || ActionPanel.IsMouseOver)
+        if (e.ChangedButton != MouseButton.Left || !IsVisible)
         {
             return;
         }
 
         try
         {
+            if (!IsActive)
+            {
+                Activate();
+            }
+
             DragMove();
             e.Handled = true;
         }
@@ -1207,6 +1672,19 @@ internal partial class PopupWindow : Window
         {
             // The mouse button may have been released before WPF starts the move loop.
         }
+    }
+
+    private void SizePresetBar_PresetSelected(
+        object? sender,
+        WindowSizePresetSelectedEventArgs e)
+    {
+        ApplySizePreset(e.Preset);
+    }
+
+    private void ApplySizePreset(WindowSizePreset preset)
+    {
+        EnterManualSizeMode(updateLayout: true);
+        WindowSizePresetCatalog.Apply(this, WindowSizePresetCatalog.ForTranslation(preset));
     }
 
     private void SetActionBarVisibility(Visibility visibility)
@@ -1285,15 +1763,15 @@ internal partial class PopupWindow : Window
 
         _lastAutomaticSizeTextLength = text.Length;
         ConfigureResizableLayout(anchorPoint);
-        ActionBarSurface.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+        HeaderBarGrid.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
         var surfaceMaximumWidth = Math.Max(1, MaxWidth - PopupSurfaceHorizontalInset);
         var surfaceMaximumHeight = Math.Max(1, MaxHeight - PopupSurfaceVerticalInset);
         var targetSize = PopupAutoSizeCalculator.Calculate(
             text,
-            FontSizeSlider.Value,
+            SizePresetBar.FontSizeValue,
             surfaceMaximumWidth,
             surfaceMaximumHeight,
-            Math.Max(0, ActionBarSurface.DesiredSize.Width - PopupSurfaceHorizontalInset));
+            Math.Max(0, HeaderBarGrid.DesiredSize.Width - PopupSurfaceHorizontalInset));
 
         var currentWidth = IsVisible && ActualWidth > 0 ? ActualWidth : 0;
         var currentHeight = IsVisible && ActualHeight > 0 ? ActualHeight : 0;
@@ -1348,22 +1826,14 @@ internal partial class PopupWindow : Window
 
     private void SetTranslationText(string text)
     {
-        var fontSize = FontSizeSlider is null || double.IsNaN(FontSizeSlider.Value)
+        var fontSize = SizePresetBar is null || double.IsNaN(SizePresetBar.FontSizeValue)
             ? DefaultTranslationFontSize
-            : FontSizeSlider.Value;
+            : SizePresetBar.FontSizeValue;
+        var highlightedText = _translationRevealDocument.Prefix(text.Length);
         if (_translationParagraph is not null
-            && string.Equals(text, _renderedTranslation, StringComparison.Ordinal))
+            && string.Equals(text, _renderedTranslation, StringComparison.Ordinal)
+            && _renderedTranslationDocument.HasSamePresentation(highlightedText))
         {
-            return;
-        }
-
-        if (_translationParagraph is not null
-            && text.StartsWith(_renderedTranslation, StringComparison.Ordinal)
-            && text.Length > _renderedTranslation.Length)
-        {
-            AppendTranslationRuns(_translationParagraph, text[_renderedTranslation.Length..]);
-            _renderedTranslation = text;
-            ApplyTranslationFontSize(fontSize);
             return;
         }
 
@@ -1373,7 +1843,11 @@ internal partial class PopupWindow : Window
             LineHeight = CalculateLineHeight(fontSize),
         };
 
-        AppendTranslationRuns(paragraph, text);
+        HighlightedTextRenderer.AppendTranslationRuns(
+            paragraph,
+            highlightedText,
+            _englishTranslationFont,
+            _chineseTranslationFont);
 
         TranslationRichTextBox.Document = new FlowDocument(paragraph)
         {
@@ -1388,27 +1862,20 @@ internal partial class PopupWindow : Window
         };
         _translationParagraph = paragraph;
         _renderedTranslation = text;
+        _renderedTranslationDocument = highlightedText;
         ApplyTranslationFontSize(fontSize);
     }
 
     private void SetExplanationText(string text)
     {
-        var fontSize = FontSizeSlider is null || double.IsNaN(FontSizeSlider.Value)
+        var fontSize = SizePresetBar is null || double.IsNaN(SizePresetBar.FontSizeValue)
             ? DefaultTranslationFontSize
-            : FontSizeSlider.Value;
+            : SizePresetBar.FontSizeValue;
+        var highlightedText = _explanationRevealDocument.Prefix(text.Length);
         if (_explanationParagraph is not null
-            && string.Equals(text, _renderedExplanation, StringComparison.Ordinal))
+            && string.Equals(text, _renderedExplanation, StringComparison.Ordinal)
+            && _renderedExplanationDocument.HasSamePresentation(highlightedText))
         {
-            return;
-        }
-
-        if (_explanationParagraph is not null
-            && text.StartsWith(_renderedExplanation, StringComparison.Ordinal)
-            && text.Length > _renderedExplanation.Length)
-        {
-            AppendExplanationText(_explanationParagraph, text[_renderedExplanation.Length..]);
-            _renderedExplanation = text;
-            ApplyExplanationFontSize(fontSize);
             return;
         }
 
@@ -1418,7 +1885,10 @@ internal partial class PopupWindow : Window
             LineHeight = CalculateLineHeight(fontSize),
             FontFamily = _chineseTranslationFont,
         };
-        AppendExplanationText(paragraph, text);
+        HighlightedTextRenderer.AppendUniformRuns(
+            paragraph,
+            highlightedText,
+            _chineseTranslationFont);
 
         ExplanationRichTextBox.Document = new FlowDocument(paragraph)
         {
@@ -1433,55 +1903,20 @@ internal partial class PopupWindow : Window
         };
         _explanationParagraph = paragraph;
         _renderedExplanation = text;
+        _renderedExplanationDocument = highlightedText;
         ApplyExplanationFontSize(fontSize);
     }
 
-    private void AppendTranslationRuns(Paragraph paragraph, string text)
+    private void QueueTranslationReveal(HighlightedText document, bool resetVisibleText)
     {
-        foreach (var segment in TranslationTypography.Segment(text))
-        {
-            AppendRun(
-                paragraph,
-                segment.Text,
-                segment.UsesChineseFont ? _chineseTranslationFont : _englishTranslationFont);
-        }
-    }
-
-    private void AppendExplanationText(Paragraph paragraph, string text)
-    {
-        AppendRun(paragraph, text, _chineseTranslationFont);
-    }
-
-    private static void AppendRun(
-        Paragraph paragraph,
-        string text,
-        System.Windows.Media.FontFamily fontFamily)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return;
-        }
-
-        if (paragraph.Inlines.LastInline is Run lastRun
-            && Equals(lastRun.FontFamily, fontFamily))
-        {
-            lastRun.Text = string.Concat(lastRun.Text, text);
-            return;
-        }
-
-        paragraph.Inlines.Add(new Run(text)
-        {
-            FontFamily = fontFamily,
-        });
-    }
-
-    private void QueueTranslationReveal(string text, bool resetVisibleText)
-    {
+        var text = document.PlainText;
+        var emphasisChanged = !_translationRevealDocument.HasSamePresentation(document);
         var needsReset = resetVisibleText
             || !text.StartsWith(_translationRevealTarget, StringComparison.Ordinal)
             || _renderedTranslation.Length > text.Length
             || !text.StartsWith(_renderedTranslation, StringComparison.Ordinal);
         _translationRevealTarget = text;
+        _translationRevealDocument = document;
 
         if (needsReset)
         {
@@ -1489,30 +1924,43 @@ internal partial class PopupWindow : Window
             _completeTranslationAfterReveal = false;
             _translationParagraph = null;
             _renderedTranslation = string.Empty;
+            _renderedTranslationDocument = HighlightedText.Empty;
 
             var initialEnd = AdvanceRevealIndex(text, 0, StreamingRevealInitialCharacters);
             SetTranslationText(text[..initialEnd]);
+        }
+        else if (emphasisChanged)
+        {
+            SetTranslationText(_renderedTranslation);
         }
 
         EnsureTranslationRevealTimer();
     }
 
-    private void QueueExplanationReveal(string text, bool resetVisibleText)
+    private void QueueExplanationReveal(HighlightedText document, bool resetVisibleText)
     {
+        var text = document.PlainText;
+        var emphasisChanged = !_explanationRevealDocument.HasSamePresentation(document);
         var needsReset = resetVisibleText
             || !text.StartsWith(_explanationRevealTarget, StringComparison.Ordinal)
             || _renderedExplanation.Length > text.Length
             || !text.StartsWith(_renderedExplanation, StringComparison.Ordinal);
         _explanationRevealTarget = text;
+        _explanationRevealDocument = document;
 
         if (needsReset)
         {
             _explanationRevealTimer.Stop();
             _explanationParagraph = null;
             _renderedExplanation = string.Empty;
+            _renderedExplanationDocument = HighlightedText.Empty;
 
             var initialEnd = AdvanceRevealIndex(text, 0, StreamingRevealInitialCharacters);
             SetExplanationText(text[..initialEnd]);
+        }
+        else if (emphasisChanged)
+        {
+            SetExplanationText(_renderedExplanation);
         }
 
         EnsureExplanationRevealTimer();
@@ -1584,6 +2032,7 @@ internal partial class PopupWindow : Window
         if (clearTarget)
         {
             _translationRevealTarget = string.Empty;
+            _translationRevealDocument = HighlightedText.Empty;
         }
     }
 
@@ -1593,6 +2042,7 @@ internal partial class PopupWindow : Window
         if (clearTarget)
         {
             _explanationRevealTarget = string.Empty;
+            _explanationRevealDocument = HighlightedText.Empty;
         }
     }
 
@@ -1721,16 +2171,11 @@ internal partial class PopupWindow : Window
         return geometry;
     }
 
-    private void FontSizeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    private void SizePresetBar_FontSizeChanged(object? sender, WindowFontSizeChangedEventArgs e)
     {
         if (double.IsNaN(e.NewValue) || e.NewValue <= 0)
         {
             return;
-        }
-
-        if (FontSizeValueText is not null)
-        {
-            FontSizeValueText.Text = e.NewValue.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
         }
 
         ApplyTranslationFontSize(e.NewValue);

@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 - 2026-09-04
+
+### Added
+
+- Added a compact question bar below completed translations and explanations. Each translation popup owns an independent multi-turn AI conversation window with streamed answers, stop, retry, copy, resize, zoom, pin, and close controls.
+- Added a bottom-right DeepSeek quick-chat launcher to every translation popup. It opens one reusable, compact, topmost conversation window, streams concise answers in the question's language, and sends no translation context or AI-history records.
+- Added opt-in AI history. Completed explanations and answers for the same selection are atomically stored in one schema-marked Markdown file under a user-selected directory; disabled, cancelled, failed, and partial results write nothing.
+- Added on-demand AI summaries for today, the last seven days, or all schema-marked InstantTranslate records. Summaries are classified, streamed through the existing DeepSeek configuration, and written as new non-overwriting Markdown files.
+- Added a loopback-only Zotero selection bridge and companion Zotero 7–9 plugin. It reads only the current built-in PDF-reader selection and does not access the Zotero library or system clipboard.
+- Added a compact top-left size preset panel to translation, explanation, contextual Q&A, and DeepSeek quick-chat windows. It provides one-click small, medium, large, wide, tall, and square layouts while preserving manual edge resizing.
+- Added an always-visible, directly draggable text-size slider to every translation, explanation, contextual Q&A, and DeepSeek quick-chat window. Translation and explanation share a live size, while each conversation window controls its own transcript.
+- Added explicit `Record` actions to completed explanations, contextual Q&A, and DeepSeek quick chat. A click appends the complete valuable content to one schema-marked Markdown file per local day in the user-selected folder, even when automatic AI history is disabled.
+- Added a `Code / 代码` action to completed translation popups. It treats the original selection as code, streams a Chinese analysis of the likely language, common use, meaning, important logic, alternatives, and caveats, and reuses the explain overlay, cancellation, copy, follow-up, and Record flows.
+- Added AI-selected inline emphasis for translations, explanations, code analyses, contextual Q&A, and DeepSeek quick chat. DeepSeek can mark up to three short key phrases; the client safely renders three emphasis levels while keeping copied, recorded, and follow-up text clean.
+- Added independent AI emphasis palettes in Settings: Clarity, Morandi, Ocean, Warm, and High contrast. Palette changes update open popups immediately without changing the main accent color or popup style.
+
+### Changed
+
+- Added lighter opaque mist surfaces for explanation and Q&A while preserving actual window opacity at 1 and retaining system colors in high-contrast mode.
+- Isolated Q&A and explanation work from the foreground translation path with independent low-priority concurrency, cancellation, request versions, and timeout protection.
+- Increased UI Automation traversal depth for Chromium/Adobe PDF trees, added a bounded top-level `Document` fallback, and allowed a longer non-clipboard stabilization window for Edge PDF selections.
+- Added a short, reversible Edge accessibility activation pulse before PDF selection reads. This enables Edge's otherwise dormant UI Automation document tree without modifying browser shortcuts, injecting keys, or using the clipboard.
+- Added a dedicated, generously sized top drag handle with hover feedback and enlarged native edge/corner resize hit targets with explicit resize cursors, keeping the translation text area selectable.
+- Kept preset resizing anchored at the window's current position, clamped the result to the active monitor, replaced the `S / M / L` letters with progressively sized window-outline icons, and aligned all six presets plus the direct font slider in one compact row.
+- Removed the extra `Aa` expansion step, updated large-type line spacing in conversation transcripts, and reserved enough automatic popup height for the persistent control panel without hiding translated text.
+- Pinned local builds to the .NET 8 SDK family so a newer incomplete SDK installation cannot silently take over the WPF toolchain.
+- Kept malformed or partial AI emphasis transport markers out of the visible text during streaming, so unfinished metadata can never leak into a popup, selection, clipboard copy, or Markdown record.
+
+### Privacy
+
+- AI history remains off by default and clearly identifies its files as plain, readable Markdown. Manual daily records are written only after an explicit `Record` click; the app refuses to overwrite a same-named foreign file and sends automatic-history records for summarization only after the user clicks AI Summary.
 
 ## 0.6.0 - 2026-08-28
 

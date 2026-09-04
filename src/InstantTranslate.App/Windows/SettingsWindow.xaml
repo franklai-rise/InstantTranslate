@@ -614,6 +614,93 @@
                 <Border Margin="0,14,0,0" Style="{StaticResource CardStyle}">
                     <StackPanel>
                         <TextBlock Style="{StaticResource SectionTitleStyle}"
+                                   Tag="loc:AiHistoryTitle"
+                                   Text="AI history" />
+                        <TextBlock Margin="0,4,0,17"
+                                    Style="{StaticResource SupportingTextStyle}"
+                                    TextWrapping="Wrap"
+                                    Tag="loc:AiHistoryDescription"
+                                    Text="Choose where manual Record entries are saved. Automatic history for every completed explanation and answer remains optional." />
+
+                        <CheckBox x:Name="AiHistoryEnabledCheckBox"
+                                  Content="Save AI explanations and Q&amp;A"
+                                  Tag="loc:EnableAiHistory"
+                                  Checked="AiHistoryEnabledCheckBox_Changed"
+                                  Unchecked="AiHistoryEnabledCheckBox_Changed" />
+                        <TextBlock Margin="28,4,0,0"
+                                    Style="{StaticResource SupportingTextStyle}"
+                                    TextWrapping="Wrap"
+                                    Tag="loc:AiHistoryPrivacy"
+                                    Text="Manual Record saves only when clicked. Files are readable Markdown and may contain private selected text." />
+
+                        <TextBlock Margin="0,17,0,0"
+                                   Style="{StaticResource FieldLabelStyle}"
+                                   Tag="loc:HistoryDirectory"
+                                   Text="Save folder" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="AiHistoryDirectoryTextBox"
+                                     VerticalContentAlignment="Center"
+                                     TextChanged="AiHistoryDirectoryTextBox_TextChanged" />
+                            <Button Grid.Column="1"
+                                    Margin="8,0,0,0"
+                                    Content="Browse"
+                                    Tag="loc:Browse"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="BrowseAiHistoryDirectoryButton_Click" />
+                            <Button x:Name="OpenAiHistoryDirectoryButton"
+                                    Grid.Column="2"
+                                    Margin="8,0,0,0"
+                                    Content="Open"
+                                    Tag="loc:OpenFolder"
+                                     Style="{StaticResource SecondaryButtonStyle}"
+                                     Click="OpenAiHistoryDirectoryButton_Click" />
+                        </Grid>
+                        <TextBlock Margin="0,7,0,0"
+                                   Style="{StaticResource SupportingTextStyle}"
+                                   TextWrapping="Wrap"
+                                   Tag="loc:ManualRecordDirectoryDescription"
+                                   Text="Manual Record works even when automatic history is off and appends to one Markdown file per day." />
+
+                        <Grid Margin="0,17,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="16" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                           Tag="loc:SummaryRange"
+                                           Text="Summary range" />
+                                <ComboBox x:Name="AiSummaryRangeComboBox" SelectedValuePath="Tag">
+                                    <ComboBoxItem Content="Today" Tag="today" />
+                                    <ComboBoxItem Content="Last 7 days" Tag="last-7-days" />
+                                    <ComboBoxItem Content="All records" Tag="all" />
+                                </ComboBox>
+                            </StackPanel>
+                            <Button x:Name="GenerateAiSummaryButton"
+                                    Grid.Column="2"
+                                    MinWidth="126"
+                                    Margin="0,22,0,0"
+                                    Content="AI summary"
+                                    Tag="loc:GenerateSummary"
+                                    Style="{StaticResource PrimaryButtonStyle}"
+                                    Click="GenerateAiSummaryButton_Click" />
+                        </Grid>
+                        <TextBlock x:Name="AiHistoryStatusText"
+                                   Margin="0,12,0,0"
+                                   Foreground="{DynamicResource AppMutedTextBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Margin="0,14,0,0" Style="{StaticResource CardStyle}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitleStyle}"
                                    Tag="loc:TranslationAppearanceTitle"
                                    Text="Translation &amp; appearance" />
                         <TextBlock Margin="0,4,0,17"
@@ -885,6 +972,77 @@
                                 </Border>
                             </Grid>
                         </Grid>
+
+                        <Grid Margin="0,17,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="16" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                           Tag="loc:HighlightPalette"
+                                           Text="Highlight palette" />
+                                <ComboBox x:Name="HighlightPaletteComboBox"
+                                          IsEditable="False"
+                                          SelectedValuePath="Tag"
+                                          SelectionChanged="HighlightPaletteComboBox_SelectionChanged">
+                                    <ComboBoxItem Content="Clarity" Tag="clarity" />
+                                    <ComboBoxItem Content="Morandi" Tag="morandi" />
+                                    <ComboBoxItem Content="Ocean" Tag="ocean" />
+                                    <ComboBoxItem Content="Warm" Tag="warm" />
+                                    <ComboBoxItem Content="High contrast" Tag="contrast" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                           Tag="loc:HighlightPalettePreview"
+                                           Text="AI emphasis preview" />
+                                <StackPanel Orientation="Horizontal"
+                                            Height="32"
+                                            VerticalAlignment="Center">
+                                    <Border x:Name="HighlightPrimaryPreviewBorder"
+                                            Width="58"
+                                            Height="25"
+                                            Margin="0,0,7,0"
+                                            CornerRadius="6">
+                                        <TextBlock x:Name="HighlightPrimaryPreviewText"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="11"
+                                                   FontWeight="SemiBold"
+                                                   Text="Key" />
+                                    </Border>
+                                    <Border x:Name="HighlightSecondaryPreviewBorder"
+                                            Width="46"
+                                            Height="25"
+                                            Margin="0,0,7,0"
+                                            CornerRadius="6">
+                                        <TextBlock x:Name="HighlightSecondaryPreviewText"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="11"
+                                                   FontWeight="SemiBold"
+                                                   Text="AI" />
+                                    </Border>
+                                    <Border x:Name="HighlightTertiaryPreviewBorder"
+                                            Width="46"
+                                            Height="25"
+                                            CornerRadius="6">
+                                        <TextBlock x:Name="HighlightTertiaryPreviewText"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="11"
+                                                   FontWeight="SemiBold"
+                                                   Text="Note" />
+                                    </Border>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Margin="0,7,0,0"
+                                   Style="{StaticResource SupportingTextStyle}"
+                                   Tag="loc:HighlightPaletteDescription"
+                                   Text="DeepSeek marks only the most useful generated phrases. Copy, history, and saved records keep normal text." />
 
                         <Grid Margin="0,18,0,0">
                             <Grid.ColumnDefinitions>

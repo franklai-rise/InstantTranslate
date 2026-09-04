@@ -6,6 +6,7 @@ internal enum TranslationTrigger
 {
     Selection,
     Clipboard,
+    ZoteroIntegration,
     Retranslation,
 }
 

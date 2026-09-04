@@ -9,6 +9,7 @@ internal static class NativeMethods
     internal const int WhMouseLl = 14;
     internal const int WmQuit = 0x0012;
     internal const int WmMouseActivate = 0x0021;
+    internal const int WmSetCursor = 0x0020;
     internal const int WmNcHitTest = 0x0084;
     internal const int WmGetText = 0x000D;
     internal const int WmGetTextLength = 0x000E;
@@ -55,7 +56,36 @@ internal static class NativeMethods
     internal const uint GrGdiObjects = 0;
     internal const uint GrUserObjects = 1;
     internal const uint CoInitMultithreaded = 0x0;
+    internal const uint SpiGetScreenReader = 0x0046;
+    internal const uint SpiSetScreenReader = 0x0047;
+    internal const uint SpifSendChange = 0x0002;
     internal static readonly IntPtr HwndTopmost = new(-1);
+    internal static readonly IntPtr CursorSizeNesw = new(32643);
+    internal static readonly IntPtr CursorSizeNwse = new(32642);
+    internal static readonly IntPtr CursorSizeNs = new(32645);
+    internal static readonly IntPtr CursorSizeWe = new(32644);
+
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SystemParametersInfoGet(
+        uint action,
+        uint parameter,
+        ref int value,
+        uint updateFlags);
+
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SystemParametersInfoSet(
+        uint action,
+        uint parameter,
+        IntPtr value,
+        uint updateFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern IntPtr LoadCursor(IntPtr instance, IntPtr cursorName);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr SetCursor(IntPtr cursor);
 
     internal delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 

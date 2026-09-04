@@ -41,6 +41,9 @@ internal static class ThemeManager
         SetBrush(application.Resources, "AccentLightBrush", palette.AccentLight);
         SetBrush(application.Resources, "AccentTextBrush", "#FFFFFF");
         SetBrush(application.Resources, "SwitchKnobBrush", "#FFFFFF");
+        ApplyContentHighlightResources(
+            application.Resources,
+            HighlightPaletteCatalog.Resolve(settings.HighlightPalette));
         var popupVisualStyle = PopupVisualStyleCatalog.Normalize(settings.PopupVisualStyle);
         ApplyPopupResources(application.Resources, palette, popupVisualStyle);
         ApplyExplanationResources(application.Resources, popupVisualStyle);
@@ -71,6 +74,12 @@ internal static class ThemeManager
         SetBrush(resources, "PopupTextBrush", WpfSystemColors.WindowTextBrush);
         SetBrush(resources, "PopupMutedBrush", WpfSystemColors.GrayTextBrush);
         SetBrush(resources, "PopupBadgeBrush", WpfSystemColors.HighlightBrush);
+        SetBrush(resources, "ContentHighlightPrimaryBrush", WpfSystemColors.HighlightTextBrush);
+        SetBrush(resources, "ContentHighlightPrimaryBackgroundBrush", WpfSystemColors.HighlightBrush);
+        SetBrush(resources, "ContentHighlightSecondaryBrush", WpfSystemColors.HighlightTextBrush);
+        SetBrush(resources, "ContentHighlightSecondaryBackgroundBrush", WpfSystemColors.HighlightBrush);
+        SetBrush(resources, "ContentHighlightTertiaryBrush", WpfSystemColors.HighlightTextBrush);
+        SetBrush(resources, "ContentHighlightTertiaryBackgroundBrush", WpfSystemColors.HighlightBrush);
         SetBrush(resources, "PopupHighlightBrush", WpfSystemColors.WindowBrush);
         SetBrush(resources, "PopupTailBrush", WpfSystemColors.WindowBrush);
         SetBrush(resources, "PopupTailStrokeBrush", WpfSystemColors.WindowTextBrush);
@@ -81,6 +90,9 @@ internal static class ThemeManager
         SetEffect(resources, "PopupActionBarShadowEffect", CreateShadow(WpfColors.Transparent, 0, 0, 0));
         SetBrush(resources, "ExplanationSurfaceBrush", WpfSystemColors.WindowBrush);
         SetBrush(resources, "ExplanationHeaderBrush", WpfSystemColors.HighlightBrush);
+        SetBrush(resources, "QuestionAnswerSurfaceBrush", WpfSystemColors.WindowBrush);
+        SetBrush(resources, "QuestionAnswerHeaderBrush", WpfSystemColors.HighlightBrush);
+        SetBrush(resources, "QuestionInputBrush", WpfSystemColors.WindowBrush);
     }
 
     internal static SolidColorBrush CreateBrush(string colorValue)
@@ -165,6 +177,18 @@ internal static class ThemeManager
         SetEffect(resources, "PopupActionBarShadowEffect", CreateShadow(WpfColor.FromRgb(47, 72, 108), 0.10, 12, 4));
     }
 
+    private static void ApplyContentHighlightResources(
+        ResourceDictionary resources,
+        HighlightPalette palette)
+    {
+        SetBrush(resources, "ContentHighlightPrimaryBrush", palette.PrimaryForeground);
+        SetBrush(resources, "ContentHighlightPrimaryBackgroundBrush", palette.PrimaryBackground);
+        SetBrush(resources, "ContentHighlightSecondaryBrush", palette.SecondaryForeground);
+        SetBrush(resources, "ContentHighlightSecondaryBackgroundBrush", palette.SecondaryBackground);
+        SetBrush(resources, "ContentHighlightTertiaryBrush", palette.TertiaryForeground);
+        SetBrush(resources, "ContentHighlightTertiaryBackgroundBrush", palette.TertiaryBackground);
+    }
+
     private static void ApplyBubbleV2Resources(ResourceDictionary resources, ThemePalette palette)
     {
         SetBrush(resources, "PopupBackgroundBrush", CreateBubbleV2SurfaceBrush());
@@ -189,13 +213,46 @@ internal static class ThemeManager
     {
         if (PopupVisualStyleCatalog.IsBubbleV2(popupVisualStyle))
         {
-            SetBrush(resources, "ExplanationSurfaceBrush", "#F7F8FC");
-            SetBrush(resources, "ExplanationHeaderBrush", "#EBEDF6");
+            SetBrush(resources, "ExplanationSurfaceBrush", CreateAuxiliarySurfaceBrush(
+                "#FFFFFF", "#F3F8FF", "#FBF5FF"));
+            SetBrush(resources, "ExplanationHeaderBrush", "#F6F8FD");
+            SetBrush(resources, "QuestionAnswerSurfaceBrush", CreateAuxiliarySurfaceBrush(
+                "#FFFFFF", "#F0F7FF", "#F9F2FF"));
+            SetBrush(resources, "QuestionAnswerHeaderBrush", "#F5F7FD");
+            SetBrush(resources, "QuestionInputBrush", "#FCFDFF");
             return;
         }
 
-        SetBrush(resources, "ExplanationSurfaceBrush", "#EEF0F3");
-        SetBrush(resources, "ExplanationHeaderBrush", "#E4E7EC");
+        SetBrush(resources, "ExplanationSurfaceBrush", CreateAuxiliarySurfaceBrush(
+            "#FFFFFF", "#F5F8FC", "#EEF3F9"));
+        SetBrush(resources, "ExplanationHeaderBrush", "#F3F6FA");
+        SetBrush(resources, "QuestionAnswerSurfaceBrush", CreateAuxiliarySurfaceBrush(
+            "#FFFFFF", "#F3F7FC", "#ECF2F9"));
+        SetBrush(resources, "QuestionAnswerHeaderBrush", "#F1F5FA");
+        SetBrush(resources, "QuestionInputBrush", "#FFFFFF");
+    }
+
+    private static LinearGradientBrush CreateAuxiliarySurfaceBrush(
+        string start,
+        string middle,
+        string end)
+    {
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new WpfPoint(0, 0),
+            EndPoint = new WpfPoint(1, 1),
+        };
+        brush.GradientStops.Add(new GradientStop(
+            (WpfColor)System.Windows.Media.ColorConverter.ConvertFromString(start),
+            0));
+        brush.GradientStops.Add(new GradientStop(
+            (WpfColor)System.Windows.Media.ColorConverter.ConvertFromString(middle),
+            0.58));
+        brush.GradientStops.Add(new GradientStop(
+            (WpfColor)System.Windows.Media.ColorConverter.ConvertFromString(end),
+            1));
+        brush.Freeze();
+        return brush;
     }
 
     private static LinearGradientBrush CreateBubbleSurfaceBrush()

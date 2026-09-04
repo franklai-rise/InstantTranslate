@@ -48,4 +48,12 @@ public sealed class PopupAutoSizeCalculatorTests
 
         Assert.True(size.Width >= 560);
     }
+
+    [Fact]
+    public void Calculate_ReservesHeightForPersistentWindowAndFontControls()
+    {
+        var size = PopupAutoSizeCalculator.Calculate("Short translation.", 16.5, 1920, 1080);
+
+        Assert.True(size.Height >= PopupAutoSizeCalculator.MinimumHeight);
+    }
 }
