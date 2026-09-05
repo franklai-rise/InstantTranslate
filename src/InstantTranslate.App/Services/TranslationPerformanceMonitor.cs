@@ -15,6 +15,7 @@ internal enum TranslationOutcome
     Succeeded,
     Failed,
     Cancelled,
+    NoSelection,
 }
 
 internal sealed record TranslationPerformanceSample(
@@ -81,7 +82,8 @@ internal sealed class TranslationPerformanceMonitor
 
         var succeeded = samples.Count(sample => sample.Outcome == TranslationOutcome.Succeeded);
         var failed = samples.Count(sample => sample.Outcome == TranslationOutcome.Failed);
-        var cancelled = samples.Count - succeeded - failed;
+        var cancelled = samples.Count(sample => sample.Outcome == TranslationOutcome.Cancelled);
+        var noSelection = samples.Count(sample => sample.Outcome == TranslationOutcome.NoSelection);
         var cacheHits = samples.Count(sample => sample.CacheHit);
         var coalesced = samples.Count(sample => sample.Coalesced);
         var selection = samples
@@ -103,6 +105,7 @@ internal sealed class TranslationPerformanceMonitor
             {
                 "InstantTranslate 性能诊断",
                 $"样本：{samples.Count}（成功 {succeeded} / 失败 {failed} / 取消 {cancelled}）",
+                $"未读取到选中文字：{noSelection}（尚未请求翻译或显示译文窗）",
                 $"缓存命中：{Percent(cacheHits, samples.Count)} · 合并重复请求：{coalesced}",
                 FormatPercentiles("读取选区", selection, "毫秒"),
                 FormatPercentiles("请求排队", queue, "毫秒"),
@@ -114,6 +117,7 @@ internal sealed class TranslationPerformanceMonitor
             {
                 "InstantTranslate performance diagnostics",
                 $"Samples: {samples.Count} (success {succeeded} / failed {failed} / cancelled {cancelled})",
+                $"No selection read: {noSelection} (before translation or popup display)",
                 $"Cache hits: {Percent(cacheHits, samples.Count)} · Coalesced duplicates: {coalesced}",
                 FormatPercentiles("Selection read", selection, "ms"),
                 FormatPercentiles("Request queue", queue, "ms"),

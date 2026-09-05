@@ -20,12 +20,20 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 
 ## 15 秒开始使用
 
-1. 下载并解压 `InstantTranslate-v0.7.0-win-x64.zip`。
+1. 下载并解压 `InstantTranslate-v0.7.1-win-x64.zip`。
 2. 运行 `InstantTranslate.exe`；首次启动会打开设置。
 3. 填写 DeepSeek API Key，点击“Test connection”（切换中文后为“测试连接”），成功后保存。
 4. 在记事本、浏览器或文档中用鼠标拖选文字。
 
 程序常驻系统托盘。再次双击 EXE 不会重复安装鼠标钩子，而会唤起已有实例的设置页。
+
+## v0.7.1 Edge PDF 取词恢复
+
+- 改进滚动、缩放和渲染节点变化后的选区读取；失效节点不会直接中断后续安全读取。
+- 优先搜索鼠标附近的可见 PDF 文本节点，不再只尝试文档顺序中的前 8 个节点；搜索仍有固定上限。
+- Edge 可访问性激活增加按窗口限频的恢复机制；取词超时会同时取消底层读取，而非仅停止等待。
+- 性能诊断区分“未读到选区”和“翻译失败”，仅保留计数与耗时，不记录正文。
+- 默认仍不模拟按键、不改写剪贴板；本次不包含 Zotero 兼容修复。
 
 ## AI Explain
 
@@ -101,9 +109,8 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 ## Edge 与 Zotero PDF 阅读器
 
 - Edge 内置 PDF 阅读器无需额外安装组件。新版会在读取前短暂激活 Edge 默认休眠的可访问性树，随后立即恢复 Windows 原有的屏幕阅读器状态；不会修改 Edge 快捷方式、模拟按键或使用剪贴板。请确保 PDF 处于可选择文字状态，而不是手形拖动或扫描图片。
-- Zotero 内置 PDF 阅读器不把当前选区公开给 Windows UI Automation，因此需要随程序提供的 `InstantTranslate-Zotero-Selection.xpi`。在 Zotero 中打开 **Tools → Plugins**，从齿轮菜单选择 **Install Plugin From File…**，安装后重启 Zotero。
-- Zotero 插件只读取 PDF 阅读器当前框选的文字，通过 `127.0.0.1` 发送到本机 InstantTranslate；它不读取文献库、笔记、附件列表、账户或凭据，也不使用系统剪贴板。
-- 安装成功后，在 Zotero PDF 中框选文字会自动弹出翻译；选区工具条里的 **InstantTranslate** 按钮也可以手动重发本次选区。
+- **Zotero 已知限制：** 内置 PDF 阅读器兼容问题尚未解决，Zotero 9.0.6 会拒绝当前旧桥接插件的安装；v0.7.1 未修改该插件，不应视为已支持 Zotero PDF 自动划词。相关排查已暂停。
+- 现有 Zotero 桥接的设计是仅通过 `127.0.0.1` 传送当前选区，不读取文献库、笔记、附件列表、账户或凭据，也不使用系统剪贴板；上述设计不代表当前安装包已经通过 Zotero 端到端验证。
 
 ## 微信和自绘应用
 
@@ -185,7 +192,7 @@ API Key 由密码框录入并保存在 Windows 凭据管理器中，不写入设
   - 性能诊断只在内存保留最近 100 组数值和状态；输入捕获诊断仅记录钩子是否运行和最近一次物理鼠标按键时间，不采集原文、译文、凭据、Endpoint 或路径；仅在你选择托盘命令时复制到剪贴板。
 - API Key 保存在 Windows Credential Manager 的 `InstantTranslate/DeepSeekApiKey`。
 - 自动取词默认不注入键盘、不修改剪贴板；终端应用始终禁用自动剪贴板回退。若确实需要兼容自绘应用，可在设置中主动打开兼容模式。
-- 跨窗口或跨进程拖动会被拒绝，UI Automation 焦点候选也必须属于鼠标命中的同一进程。
+- 跨窗口或跨进程拖动会被拒绝；UI Automation 焦点候选通常必须属于鼠标命中的同一进程。浏览器嵌入的 PDF 渲染进程仅在能确认属于同一个目标窗口时例外。
 - UI Automation 密码元素和带 Windows 密码样式的原生输入框会被直接跳过。
 - 应用以普通用户权限运行，不请求管理员权限或 `uiAccess`。
 
@@ -220,7 +227,7 @@ dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --co
 ## 打包
 
 ```powershell
-.\scripts\Publish.ps1 -Version 0.7.0
+.\scripts\Publish.ps1 -Version 0.7.1
 ```
 
 脚本会依次恢复依赖、Release 构建、运行全部测试、发布自包含单文件程序、执行烟雾测试、生成 ZIP 和 SHA-256 校验文件。结果位于 `artifacts/release/`。
@@ -228,7 +235,7 @@ dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --co
 如已在 Windows 证书存储中安装带私钥的代码签名证书，可选签名并验证成品：
 
 ```powershell
-.\scripts\Publish.ps1 -Version 0.7.0 -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
+.\scripts\Publish.ps1 -Version 0.7.1 -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
 ```
 
 也可使用 `-CertificateStoreLocation LocalMachine`、`-TimestampUrl` 或 `-SignToolPath` 指定企业环境。没有证书时成品仍为未签名程序，在部分电脑上首次运行可能出现 Windows SmartScreen“未知发布者”提示。Microsoft Store / MSIX 发布仍需要开发者账户及与该账户匹配的包身份，脚本不会伪造这些信息。

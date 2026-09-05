@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.7.1 - 2026-09-05
+
+### Fixed
+
+- Improved Edge PDF selection recovery after scrolling, zooming, or renderer changes. Accessibility activation is now window-scoped, rate-limited, and refreshable after an empty read instead of being attempted only once per process.
+- Continue through fresh focused/document candidates when a hit or ancestor node has expired, while still rejecting password-protected paths before reading any text.
+- Search current visible document branches near the selection instead of limiting fallback to the first eight document nodes. Embedded renderer candidates must have verified ownership of the target browser window.
+- Cancel the underlying selection read when its time budget expires so later gestures can recover when the external provider responds to cancellation. Physical reader concurrency remains bounded.
+
+### Diagnostics
+
+- Distinguish an empty selection from cancellation or translation failure, and include privacy-safe selection and Edge recovery counters in performance diagnostics.
+- Added 21 regression cases for detached nodes, visible/deep document traversal, renderer ownership, refresh timing, cancellation, and selection outcomes.
+
+### Known limitations
+
+- Zotero's built-in PDF reader remains unresolved. The existing companion plugin is unchanged and can be rejected by Zotero 9.0.6; this release does not claim to fix or validate Zotero selection translation.
+- Automated tests cover the recovery logic, not every Edge build or PDF. Manual Edge PDF verification of the newly packaged v0.7.1 executable is still pending.
+
 ## 0.7.0 - 2026-09-04
 
 ### Added

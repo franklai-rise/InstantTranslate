@@ -5,6 +5,17 @@ namespace InstantTranslate.Tests;
 public sealed class TranslationPerformanceMonitorTests
 {
     [Fact]
+    public void MissingSelectionIsReportedSeparatelyFromCancellationAndApiFailure()
+    {
+        var monitor = new TranslationPerformanceMonitor();
+        monitor.Begin(TranslationTrigger.Selection, "deepseek").Complete(TranslationOutcome.NoSelection);
+        var report = monitor.CreateReport(useChinese: false);
+        Assert.Contains("No selection read: 1", report, StringComparison.Ordinal);
+        Assert.Contains("cancelled 0", report, StringComparison.Ordinal);
+        Assert.Contains("failed 0", report, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Snapshot_IsBoundedAndContainsNoTextFields()
     {
         var monitor = new TranslationPerformanceMonitor(capacity: 2);

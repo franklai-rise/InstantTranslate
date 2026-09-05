@@ -175,6 +175,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
 
             var selectionReadStartedAt = Stopwatch.GetTimestamp();
             SelectionCapture? capture;
+            using var selectionReadCancellation = CancellationTokenSource.CreateLinkedTokenSource(lease.CancellationToken);
+            selectionReadCancellation.CancelAfter(SelectionReadTimeout);
             try
             {
                 capture = _selectionReader is IContextualSelectionReader contextualReader
@@ -182,23 +184,37 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                         .TryReadSelectionAsync(
                             gesture.End,
                             settings.UseSelectionContext,
-                            lease.CancellationToken)
+                            selectionReadCancellation.Token)
                         .WaitAsync(SelectionReadTimeout, lease.CancellationToken)
                         .ConfigureAwait(false)
                     : await ReadPlainSelectionAsync(
                             _selectionReader,
                             gesture.End,
-                            lease.CancellationToken)
+                            selectionReadCancellation.Token)
                         .WaitAsync(SelectionReadTimeout, lease.CancellationToken)
                         .ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (selectionReadCancellation.IsCancellationRequested
+                                                       && !lease.CancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException("Selection read budget expired.");
+            }
             finally
             {
+                // End the actual provider operation too, not only the wait for
+                // it. Otherwise a timed-out PDF read can hold its PID slot and
+                // make later selections in the same browser look permanently dead.
+                selectionReadCancellation.Cancel();
                 performance.MarkSelectionRead(Stopwatch.GetElapsedTime(selectionReadStartedAt));
             }
             var selectedText = capture?.Text;
-            if (string.IsNullOrWhiteSpace(selectedText) || !_requestGate.IsCurrent(lease.Version))
+            if (!_requestGate.IsCurrent(lease.Version))
             {
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(selectedText))
+            {
+                outcome = TranslationOutcome.NoSelection;
                 return;
             }
 

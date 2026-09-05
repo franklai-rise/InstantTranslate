@@ -6,6 +6,16 @@ namespace InstantTranslate.Tests;
 public sealed class UiaSelectionReaderTests
 {
     [Theory]
+    [InlineData(100, true)]
+    [InlineData(101, false)]
+    [InlineData(0, false)]
+    public void EmbeddedBrowserRendererRequiresProvenWindowOwnership(int focusedWindow, bool expected)
+    {
+        Assert.Equal(expected, UiaSelectionReader.ShouldIncludeFocusedElementInTargetWindow(
+            42, 43, new IntPtr(100), new IntPtr(focusedWindow), allowEmbeddedProcess: true));
+    }
+
+    [Theory]
     [InlineData(42, 42, true)]
     [InlineData(42, 43, false)]
     [InlineData(0, 0, false)]

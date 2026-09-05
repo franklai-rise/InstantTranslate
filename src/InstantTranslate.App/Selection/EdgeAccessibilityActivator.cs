@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using InstantTranslate.Interop;
 using InstantTranslate.Models;
@@ -9,30 +8,45 @@ namespace InstantTranslate.Selection;
 /// <summary>
 /// Edge keeps its full renderer accessibility tree disabled until assistive
 /// technology is detected. A short, reversible screen-reader notification
-/// activates the tree for the current Edge process without changing browser
-/// shortcuts, injecting input, or touching the clipboard.
+/// activates a dormant tree. Window-scoped refresh is allowed after a failed
+/// read because scrolling, zooming, and renderer replacement invalidate the
+/// assumption that activation succeeds once for an entire browser process.
 /// </summary>
 internal static class EdgeAccessibilityActivator
 {
     private const int ActivationPulseMilliseconds = 100;
-    private static readonly ConcurrentDictionary<uint, byte> ActivatedProcesses = new();
+    private static readonly EdgeAccessibilityRefreshGate RefreshGate = new();
     private static readonly object ActivationSyncRoot = new();
+    private static long _activationCount;
 
-    internal static void ActivateIfNeeded(ScreenPoint point)
+    internal static long ActivationCount => Interlocked.Read(ref _activationCount);
+
+    internal static bool ActivateIfNeeded(
+        ScreenPoint point,
+        CancellationToken cancellationToken,
+        bool refresh = false)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var processId = WindowProcessResolver.TryGetExternalProcessIdAt(point);
         if (processId is not { } targetProcessId
-            || ActivatedProcesses.ContainsKey(targetProcessId)
             || !ShouldActivateProcessName(TryGetProcessName(targetProcessId)))
         {
-            return;
+            return false;
         }
 
-        lock (ActivationSyncRoot)
+        var hitWindow = NativeMethods.WindowFromPoint(new NativeMethods.NativePoint { X = point.X, Y = point.Y });
+        var targetWindow = NativeMethods.GetAncestor(hitWindow, NativeMethods.GaRoot);
+        if (targetWindow == IntPtr.Zero || !Monitor.TryEnter(ActivationSyncRoot))
         {
-            if (ActivatedProcesses.ContainsKey(targetProcessId))
+            return false;
+        }
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!RefreshGate.TryEnter(targetProcessId, targetWindow, Environment.TickCount64, refresh))
             {
-                return;
+                return false;
             }
 
             var originalScreenReaderState = 0;
@@ -42,13 +56,12 @@ internal static class EdgeAccessibilityActivator
                     ref originalScreenReaderState,
                     0))
             {
-                return;
+                return false;
             }
 
             if (originalScreenReaderState != 0)
             {
-                ActivatedProcesses.TryAdd(targetProcessId, 0);
-                return;
+                return false;
             }
 
             var activated = NativeMethods.SystemParametersInfoSet(
@@ -58,25 +71,32 @@ internal static class EdgeAccessibilityActivator
                 NativeMethods.SpifSendChange);
             if (!activated)
             {
-                return;
+                return false;
             }
 
             try
             {
-                Thread.Sleep(ActivationPulseMilliseconds);
-                ActivatedProcesses.TryAdd(targetProcessId, 0);
+                if (cancellationToken.WaitHandle.WaitOne(ActivationPulseMilliseconds))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                Interlocked.Increment(ref _activationCount);
             }
             finally
             {
                 // Restore the exact state observed before our short activation.
-                // Edge keeps accessibility enabled for its process once it has
-                // responded to the notification.
                 _ = NativeMethods.SystemParametersInfoSet(
                     NativeMethods.SpiSetScreenReader,
                     0,
                     IntPtr.Zero,
                     NativeMethods.SpifSendChange);
             }
+
+            return true;
+        }
+        finally
+        {
+            Monitor.Exit(ActivationSyncRoot);
         }
     }
 
@@ -107,6 +127,37 @@ internal static class EdgeAccessibilityActivator
         catch (OverflowException)
         {
             return null;
+        }
+    }
+}
+
+internal sealed class EdgeAccessibilityRefreshGate
+{
+    internal const int ActivationLifetimeMilliseconds = 15_000;
+    internal const int RecoveryCooldownMilliseconds = 250;
+    internal const int MaximumTrackedWindows = 64;
+    private readonly Dictionary<(uint ProcessId, IntPtr Window), long> _lastActivation = new();
+    private readonly object _sync = new();
+
+    internal bool TryEnter(uint processId, IntPtr window, long now, bool refresh)
+    {
+        lock (_sync)
+        {
+            var key = (processId, window);
+            var cooldown = refresh ? RecoveryCooldownMilliseconds : ActivationLifetimeMilliseconds;
+            if (_lastActivation.TryGetValue(key, out var last)
+                && now >= last && now - last < cooldown)
+            {
+                return false;
+            }
+
+            if (_lastActivation.Count >= MaximumTrackedWindows && !_lastActivation.ContainsKey(key))
+            {
+                _lastActivation.Remove(_lastActivation.MinBy(entry => entry.Value).Key);
+            }
+
+            _lastActivation[key] = now;
+            return true;
         }
     }
 }

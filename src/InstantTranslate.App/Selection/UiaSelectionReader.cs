@@ -16,7 +16,6 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
     // Chromium's PDF accessibility tree can put the TextPattern document more
     // than ten control-view nodes above the glyph under the pointer.
     internal const int MaximumAncestorDepth = 32;
-    private const int MaximumDocumentCandidates = 8;
     private const int MaximumConcurrentReads = 2;
     private readonly SemaphoreSlim _readSlots = new(MaximumConcurrentReads, MaximumConcurrentReads);
     private readonly ConcurrentDictionary<uint, byte> _activeTargetProcesses = new();
@@ -24,6 +23,8 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
     private readonly Func<ScreenPoint, uint?> _getTargetProcessId;
     private int _activeReadCount;
     private long _rejectedReadCount;
+    private long _emptyReadCount;
+    private long _successfulReadCount;
 
     public UiaSelectionReader()
         : this(ReadSelection, WindowProcessResolver.TryGetExternalProcessIdAt)
@@ -49,11 +50,15 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
                 Environment.NewLine,
                 "UI Automation 取词状态",
                 $"正在读取：{ActiveReadCount}/{MaximumConcurrentReads}",
+                $"读取成功：{Interlocked.Read(ref _successfulReadCount)} / 未公开选区：{Interlocked.Read(ref _emptyReadCount)}",
+                $"Edge 可访问性激活/恢复：{EdgeAccessibilityActivator.ActivationCount}",
                 $"为避免卡死已跳过：{RejectedReadCount}")
             : string.Join(
                 Environment.NewLine,
                 "UI Automation selection status",
                 $"Active reads: {ActiveReadCount}/{MaximumConcurrentReads}",
+                $"Selection found: {Interlocked.Read(ref _successfulReadCount)} / no selection exposed: {Interlocked.Read(ref _emptyReadCount)}",
+                $"Edge accessibility activations/recoveries: {EdgeAccessibilityActivator.ActivationCount}",
                 $"Skipped to avoid blocking: {RejectedReadCount}");
     }
 
@@ -167,6 +172,15 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
             }
 
             result = _readSelection(point, includeContext, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(result?.Text))
+            {
+                Interlocked.Increment(ref _emptyReadCount);
+            }
+            else
+            {
+                Interlocked.Increment(ref _successfulReadCount);
+            }
         }
         catch (OperationCanceledException exception)
         {
@@ -226,140 +240,133 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
         bool includeContext,
         CancellationToken cancellationToken)
     {
-        EdgeAccessibilityActivator.ActivateIfNeeded(point);
+        EdgeAccessibilityActivator.ActivateIfNeeded(point, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        foreach (var candidate in GetCandidateElements(point))
+        var capture = ReadCurrentSelection(point, includeContext, cancellationToken);
+        if (capture is null
+            && EdgeAccessibilityActivator.ActivateIfNeeded(point, cancellationToken, refresh: true))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var capture = TryReadFromElement(candidate, includeContext);
-            if (!string.IsNullOrWhiteSpace(capture?.Text))
-            {
-                return capture;
-            }
+            // Never reuse a hit, range, pattern, or page node after activation:
+            // a scrolled/zoomed PDF may now have an entirely new renderer tree.
+            capture = ReadCurrentSelection(point, includeContext, cancellationToken);
         }
 
-        return null;
+        return capture;
     }
 
-    private static IEnumerable<AutomationElement> GetCandidateElements(ScreenPoint point)
+    private static SelectionCapture? ReadCurrentSelection(
+        ScreenPoint point,
+        bool includeContext,
+        CancellationToken cancellationToken)
     {
-        var seenRuntimeIds = new HashSet<string>(StringComparer.Ordinal);
         var expectedRootOwner = GetRootOwnerAt(point);
-        AutomationElement? hitElement = null;
-        AutomationElement? focusedElement = null;
+        if (expectedRootOwner == IntPtr.Zero)
+        {
+            return null;
+        }
 
+        NativeMethods.GetWindowThreadProcessId(expectedRootOwner, out var ownerProcessId);
+        if (ownerProcessId == 0 || ownerProcessId == (uint)Environment.ProcessId)
+        {
+            return null;
+        }
+
+        var isDocumentHost = IsDocumentHostProcess((int)ownerProcessId);
+        AutomationElement? hitElement = null;
         try
         {
             hitElement = AutomationElement.FromPoint(new System.Windows.Point(point.X, point.Y));
         }
-        catch (ElementNotAvailableException)
-        {
-        }
-        catch (COMException)
+        catch (Exception exception) when (SelectionCandidateSearch.IsUnavailable(exception))
         {
         }
 
-        if (IsPasswordOrUnknown(hitElement))
-        {
-            yield break;
-        }
-
-        var hitProcessId = TryGetProcessId(hitElement);
-        if (hitProcessId is > 0)
+        AutomationElement? GetFocusedCandidate()
         {
             try
             {
                 var candidate = AutomationElement.FocusedElement;
                 if (ShouldIncludeFocusedElementInTargetWindow(
-                        hitProcessId,
+                        TryGetProcessId(hitElement) ?? (int)ownerProcessId,
                         TryGetProcessId(candidate),
                         expectedRootOwner,
-                        TryGetRootOwnerHandle(candidate)))
+                        TryGetRootOwnerHandle(candidate),
+                        allowEmbeddedProcess: isDocumentHost))
                 {
-                    focusedElement = candidate;
+                    return candidate;
                 }
             }
-            catch (ElementNotAvailableException)
+            catch (Exception exception) when (SelectionCandidateSearch.IsUnavailable(exception))
             {
             }
-            catch (COMException)
-            {
-            }
+
+            return null;
         }
 
-        foreach (var root in new[] { hitElement, focusedElement })
-        {
-            foreach (var current in GetSafeCandidatePath(root))
-            {
-                var identity = TryGetIdentity(current);
-                if (identity is null || seenRuntimeIds.Add(identity))
-                {
-                    yield return current;
-                }
-            }
-        }
-
-        // Edge's PDF renderer occasionally exposes the selection only on a
-        // sibling Document provider rather than on the hit element's parent
-        // chain. Search the already-identified top-level window as a bounded,
-        // final fallback. The entire UIA read runs in the existing isolated,
-        // cancellable worker, so a faulty external provider cannot block WPF.
-        foreach (var document in FindDocumentCandidates(expectedRootOwner, hitProcessId))
-        {
-            var identity = TryGetIdentity(document);
-            if (identity is null || seenRuntimeIds.Add(identity))
-            {
-                yield return document;
-            }
-        }
+        return SelectionCandidateSearch.Read(
+            hitElement,
+            GetFocusedCandidate,
+            element => element.Current.IsPassword ? SelectionNodeAccess.Protected : SelectionNodeAccess.Readable,
+            element => new IntPtr(element.Current.NativeWindowHandle) == expectedRootOwner
+                ? null
+                : TreeWalker.RawViewWalker.GetParent(element),
+            element => TryReadFromElement(element, includeContext),
+            () => isDocumentHost
+                ? FindDocumentCandidates(expectedRootOwner, point, cancellationToken)
+                : Array.Empty<AutomationElement>(),
+            cancellationToken);
     }
 
-    private static IReadOnlyList<AutomationElement> FindDocumentCandidates(
+    private static IEnumerable<AutomationElement> FindDocumentCandidates(
         IntPtr expectedRootOwner,
-        int? expectedProcessId)
+        ScreenPoint point,
+        CancellationToken cancellationToken)
     {
-        if (expectedRootOwner == IntPtr.Zero
-            || expectedProcessId is not > 0
-            || !IsDocumentHostProcess(expectedProcessId.Value))
-        {
-            return Array.Empty<AutomationElement>();
-        }
-
+        AutomationElement windowRoot;
         try
         {
-            var windowRoot = AutomationElement.FromHandle(expectedRootOwner);
-            var documents = windowRoot.FindAll(
-                TreeScope.Descendants,
-                new PropertyCondition(
-                    AutomationElement.ControlTypeProperty,
-                    ControlType.Document));
-            var result = new List<AutomationElement>(
-                Math.Min(documents.Count, MaximumDocumentCandidates));
-            for (var index = 0;
-                 index < documents.Count && result.Count < MaximumDocumentCandidates;
-                 index++)
-            {
-                var document = documents[index];
-                if (TryGetProcessId(document) == expectedProcessId
-                    && !IsPasswordOrUnknown(document))
-                {
-                    result.Add(document);
-                }
-            }
+            windowRoot = AutomationElement.FromHandle(expectedRootOwner);
+        }
+        catch (Exception exception) when (SelectionCandidateSearch.IsUnavailable(exception))
+        {
+            yield break;
+        }
 
-            return result;
-        }
-        catch (ElementNotAvailableException)
+        // Filter at the provider so hundreds of offscreen PDF pages cannot use
+        // up the traversal budget before we reach the current viewport. Cache
+        // only geometry/type/privacy properties, never names or document text.
+        var visibleWalker = new TreeWalker(new PropertyCondition(AutomationElement.IsOffscreenProperty, false));
+        var cache = new CacheRequest { TreeScope = TreeScope.Element };
+        cache.Add(AutomationElement.ControlTypeProperty);
+        cache.Add(AutomationElement.IsOffscreenProperty);
+        cache.Add(AutomationElement.BoundingRectangleProperty);
+        cache.Add(AutomationElement.IsPasswordProperty);
+
+        IEnumerable<AutomationElement> Children(AutomationElement parent)
         {
-            return Array.Empty<AutomationElement>();
+            cancellationToken.ThrowIfCancellationRequested();
+            var child = visibleWalker.GetFirstChild(parent, cache);
+            while (child is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return child;
+                child = visibleWalker.GetNextSibling(child, cache);
+            }
         }
-        catch (InvalidOperationException)
+
+        DocumentNodeInfo Info(AutomationElement element)
         {
-            return Array.Empty<AutomationElement>();
+            var state = ReferenceEquals(element, windowRoot) ? element.Current : element.Cached;
+            return new DocumentNodeInfo(
+                state.ControlType == ControlType.Document,
+                state.IsOffscreen,
+                state.BoundingRectangle.Contains(point.X, point.Y),
+                state.IsPassword);
         }
-        catch (COMException)
+
+        foreach (var document in VisibleDocumentSearch.Find(windowRoot, element => Info(element), Children, cancellationToken))
         {
-            return Array.Empty<AutomationElement>();
+            yield return document;
         }
     }
 
@@ -398,8 +405,17 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
         int? hitProcessId,
         int? focusedProcessId,
         IntPtr expectedRootOwner,
-        IntPtr focusedRootOwner)
+        IntPtr focusedRootOwner,
+        bool allowEmbeddedProcess = false)
     {
+        // A PDF renderer may use a different PID from the browser's HWND after
+        // navigation or relayout. Accept that only with proven window ownership.
+        if (allowEmbeddedProcess && focusedProcessId is > 0
+            && expectedRootOwner != IntPtr.Zero && expectedRootOwner == focusedRootOwner)
+        {
+            return true;
+        }
+
         if (!ShouldIncludeFocusedElement(hitProcessId, focusedProcessId))
         {
             return false;
@@ -412,63 +428,6 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
         return expectedRootOwner == IntPtr.Zero
                || focusedRootOwner == IntPtr.Zero
                || focusedRootOwner == expectedRootOwner;
-    }
-
-    private static IReadOnlyList<AutomationElement> GetSafeCandidatePath(AutomationElement? root)
-    {
-        var path = new List<AutomationElement>(MaximumAncestorDepth);
-        var current = root;
-        for (var depth = 0; current is not null && depth < MaximumAncestorDepth; depth++)
-        {
-            // Check the complete path before yielding any node. This prevents a
-            // child of a password control from leaking its selection before the
-            // protected ancestor is discovered.
-            if (IsPasswordOrUnknown(current))
-            {
-                return Array.Empty<AutomationElement>();
-            }
-
-            path.Add(current);
-            try
-            {
-                current = TreeWalker.ControlViewWalker.GetParent(current);
-            }
-            catch (ElementNotAvailableException)
-            {
-                break;
-            }
-            catch (COMException)
-            {
-                return Array.Empty<AutomationElement>();
-            }
-        }
-
-        return path;
-    }
-
-    private static bool IsPasswordOrUnknown(AutomationElement? element)
-    {
-        if (element is null)
-        {
-            return false;
-        }
-
-        try
-        {
-            return element.Current.IsPassword;
-        }
-        catch (ElementNotAvailableException)
-        {
-            return true;
-        }
-        catch (InvalidOperationException)
-        {
-            return true;
-        }
-        catch (COMException)
-        {
-            return true;
-        }
     }
 
     private static IntPtr GetRootOwnerAt(ScreenPoint point)
@@ -496,7 +455,7 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
                     return GetRootOwner(windowHandle);
                 }
 
-                current = TreeWalker.ControlViewWalker.GetParent(current);
+                current = TreeWalker.RawViewWalker.GetParent(current);
             }
             catch (ElementNotAvailableException)
             {
@@ -553,8 +512,7 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
         try
         {
             if (!element.TryGetCurrentPattern(TextPattern.Pattern, out var patternObject)
-                || patternObject is not TextPattern textPattern
-                || textPattern.SupportedTextSelection == SupportedTextSelection.None)
+                || patternObject is not TextPattern textPattern)
             {
                 return null;
             }
@@ -640,19 +598,4 @@ internal sealed class UiaSelectionReader : IContextualSelectionReader
         }
     }
 
-    private static string? TryGetIdentity(AutomationElement element)
-    {
-        try
-        {
-            return string.Join('.', element.GetRuntimeId());
-        }
-        catch (ElementNotAvailableException)
-        {
-            return null;
-        }
-        catch (COMException)
-        {
-            return null;
-        }
-    }
 }
