@@ -299,6 +299,15 @@
                 </Button>
             </StackPanel>
             </Border>
+            <local:LiquidGlassRim Grid.Column="2"
+                                 Width="{Binding ActualWidth, ElementName=ActionBarSurface}"
+                                 Height="{Binding ActualHeight, ElementName=ActionBarSurface}"
+                                 Margin="{Binding Margin, ElementName=ActionBarSurface}"
+                                 HorizontalAlignment="Right"
+                                 VerticalAlignment="Top"
+                                 Visibility="{Binding Visibility, ElementName=ActionBarSurface}"
+                                 CornerRadius="{DynamicResource PopupActionBarCornerRadius}"
+                                 IsGlassEnabled="{DynamicResource PopupGlassEnabled}" />
         </Grid>
 
         <Grid Grid.Row="1">
@@ -653,6 +662,13 @@
             </Grid>
             </Grid>
             </Border>
+            <local:LiquidGlassRim x:Name="GlassSurfaceRim"
+                                 Panel.ZIndex="2"
+                                 Margin="{Binding Margin, ElementName=PopupSurface}"
+                                 MaxWidth="{Binding MaxWidth, ElementName=PopupSurface}"
+                                 MaxHeight="{Binding MaxHeight, ElementName=PopupSurface}"
+                                 CornerRadius="{DynamicResource PopupSurfaceCornerRadius}"
+                                 IsGlassEnabled="{DynamicResource PopupGlassEnabled}" />
         </Grid>
     </Grid>
 </Window>

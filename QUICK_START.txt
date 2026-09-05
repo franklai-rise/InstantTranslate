@@ -1,4 +1,4 @@
-InstantTranslate 0.7.1 快速开始
+InstantTranslate 0.7.2 快速开始
 =============================
 
 1. 解压整个 ZIP，不要只单独拖出 EXE。
@@ -22,7 +22,7 @@ InstantTranslate 0.7.1 快速开始
 - Explain / 解释：在译文完成后解释本次原文；在译文正文中选中一段后，也可以单独解释该段。解释会以中文显示在原窗口内容区，可复制、重试或返回译文；Esc 也会返回。
 - 设置右上角“中文 / English”：切换整个程序的界面语言；保存后应用到浮窗和托盘。
 - 设置中的 English / Chinese translation font：分别控制英文与中文译文字体。
-- 设置中的 Popup style / 浮窗样式：可在默认的 Minimal / 极简、Bubble / 气泡和 Bubble 2.0 / 气泡 2.0 之间切换；气泡 2.0 使用更圆的外形、柔和尾巴和粉蓝紫渐变表面。
+- 设置中的 Popup style / 浮窗样式：可在默认的 Minimal / 极简、Bubble / 气泡、Bubble 2.0，以及新的 Bubble 3.0 · Glass / 液态玻璃和 Bubble 3.0 · Color Glass / 彩色玻璃之间切换。原气泡 2.0 的粉蓝紫渐变保持不变；两款 3.0 能透出后方应用画面，文字不跟随整体变淡。
 - Use surrounding context：默认关闭；开启后会把选区所在段落作为翻译参考发送给服务。
 - Translation mode / Writing style：在速度、精度和表达风格之间选择。
 - Personal glossary：每行填写“原词 => 指定译法”，只会发送当前选区命中的术语。
@@ -30,6 +30,7 @@ InstantTranslate 0.7.1 快速开始
 
 说明：
 
+- v0.7.2 新增透明玻璃样式，修复解释层与原译文的透叠，并同步问答窗切换样式后的圆角；不进行实时背景模糊或物理折射。复杂、很暗的背景可能影响文字对比度，可切回原有实色样式。
 - v0.7.1 改进 Edge PDF 滚动、缩放后的选区读取与恢复；无需开启剪贴板兼容模式。
 - Zotero 内置 PDF 阅读器兼容问题尚未解决，本次未修复其取词插件。
 - 程序需要 Windows 10/11 x64，不需要另装 .NET。

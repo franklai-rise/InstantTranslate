@@ -10,17 +10,27 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 
 ## 效果预览
 
+### Bubble 3.0 · 彩色透明玻璃
+
+![Bubble 3.0 彩色透明玻璃](docs/images/InstantTranslate-popup-bubble-v3-color-light-preview.png)
+
+### Bubble 3.0 · 冰灰透明玻璃
+
+![Bubble 3.0 冰灰透明玻璃](docs/images/InstantTranslate-popup-bubble-v3-light-preview.png)
+
+以上为实际 WPF 窗体渲染，后方色带是用于演示透明度的合成背景，不是桌面截图或背景模糊效果。
+
 ### Bubble 2.0
 
 ![Bubble 2.0 翻译浮窗](docs/images/InstantTranslate-popup-bubble-v2-preview.png)
 
-### AI Explain
+### AI Explain · 透明玻璃
 
-![AI Explain 解释界面](docs/images/InstantTranslate-popup-explanation-preview.png)
+![AI Explain 透明玻璃解释界面](docs/images/InstantTranslate-popup-bubble-v3-color-explanation-preview.png)
 
 ## 15 秒开始使用
 
-1. 下载并解压 `InstantTranslate-v0.7.1-win-x64.zip`。
+1. 下载并解压 `InstantTranslate-v0.7.2-win-x64.zip`。
 2. 运行 `InstantTranslate.exe`；首次启动会打开设置。
 3. 填写 DeepSeek API Key，点击“Test connection”（切换中文后为“测试连接”），成功后保存。
 4. 在记事本、浏览器或文档中用鼠标拖选文字。
@@ -34,6 +44,19 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 - Edge 可访问性激活增加按窗口限频的恢复机制；取词超时会同时取消底层读取，而非仅停止等待。
 - 性能诊断区分“未读到选区”和“翻译失败”，仅保留计数与耗时，不记录正文。
 - 默认仍不模拟按键、不改写剪贴板；本次不包含 Zotero 兼容修复。
+
+## v0.7.2：Bubble 3.0 · 透明玻璃
+
+设置中的 `Popup style` 新增两个独立选项：
+
+- `Bubble 3.0 · Glass / 气泡 3.0 · 液态玻璃`：真正可透出后方应用画面的透明底，配上冰灰色染和细薄高光。
+- `Bubble 3.0 · Color Glass / 气泡 3.0 · 彩色玻璃`：同样的透明底，保留气泡 2.0 的粉、蓝、紫配色作为轻微色染。
+
+两者都保留 2.0 的圆润轮廓和气泡尾巴，翻译正文、功能栏及问答窗使用配套材质。原有气泡 2.0 的颜色和其他样式、用户字体不变。
+
+背景使用真实的窗口透明混合，主底色只有约 20%–30% 不透明度，文字和按钮内容不跟随整体变淡；正文带细微浅色字缘以增强深色背景上的辨识度。解释打开时暂时隐藏下方译文的绘制，返回时恢复正文和选区，避免两个文本层透叠。
+
+这里的玻璃效果是透明色染与高光，不捕获或模糊其他应用的画面，不进行真实背景折射，也不添加持续动画。复杂或很暗的背景仍可能降低文字对比度；高对比度模式自动回到系统实色。新安装默认仍为极简样式，升级不会强制改变已保存的样式，请在设置中主动选择玻璃版本。
 
 ## AI Explain
 
@@ -109,7 +132,7 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 ## Edge 与 Zotero PDF 阅读器
 
 - Edge 内置 PDF 阅读器无需额外安装组件。新版会在读取前短暂激活 Edge 默认休眠的可访问性树，随后立即恢复 Windows 原有的屏幕阅读器状态；不会修改 Edge 快捷方式、模拟按键或使用剪贴板。请确保 PDF 处于可选择文字状态，而不是手形拖动或扫描图片。
-- **Zotero 已知限制：** 内置 PDF 阅读器兼容问题尚未解决，Zotero 9.0.6 会拒绝当前旧桥接插件的安装；v0.7.1 未修改该插件，不应视为已支持 Zotero PDF 自动划词。相关排查已暂停。
+- **Zotero 已知限制：** 内置 PDF 阅读器兼容问题尚未解决，Zotero 9.0.6 会拒绝当前旧桥接插件的安装；v0.7.2 未修改该插件，不应视为已支持 Zotero PDF 自动划词。相关排查已暂停。
 - 现有 Zotero 桥接的设计是仅通过 `127.0.0.1` 传送当前选区，不读取文献库、笔记、附件列表、账户或凭据，也不使用系统剪贴板；上述设计不代表当前安装包已经通过 Zotero 端到端验证。
 
 ## 微信和自绘应用
@@ -227,7 +250,7 @@ dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --co
 ## 打包
 
 ```powershell
-.\scripts\Publish.ps1 -Version 0.7.1
+.\scripts\Publish.ps1 -Version 0.7.2
 ```
 
 脚本会依次恢复依赖、Release 构建、运行全部测试、发布自包含单文件程序、执行烟雾测试、生成 ZIP 和 SHA-256 校验文件。结果位于 `artifacts/release/`。
@@ -235,7 +258,7 @@ dotnet run --project .\src\InstantTranslate.App\InstantTranslate.App.csproj --co
 如已在 Windows 证书存储中安装带私钥的代码签名证书，可选签名并验证成品：
 
 ```powershell
-.\scripts\Publish.ps1 -Version 0.7.1 -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
+.\scripts\Publish.ps1 -Version 0.7.2 -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
 ```
 
 也可使用 `-CertificateStoreLocation LocalMachine`、`-TimestampUrl` 或 `-SignToolPath` 指定企业环境。没有证书时成品仍为未签名程序，在部分电脑上首次运行可能出现 Windows SmartScreen“未知发布者”提示。Microsoft Store / MSIX 发布仍需要开发者账户及与该账户匹配的包身份，脚本不会伪造这些信息。

@@ -6,6 +6,20 @@ namespace InstantTranslate.Tests;
 
 public sealed class SettingsStoreMigrationTests
 {
+    [Theory]
+    [InlineData(" BUBBLE-V3 ", "bubble-v3")]
+    [InlineData(" BUBBLE-V3-COLOR ", "bubble-v3-color")]
+    public void NormalizeSettings_GlassStyle_RoundTripsWithoutChangingPrivacyPreferences(string value, string expected)
+    {
+        var json = JsonSerializer.Serialize(AppSettings.Default with { PopupVisualStyle = value });
+        var normalized = SettingsStore.NormalizeSettings(JsonSerializer.Deserialize<AppSettings>(json));
+
+        Assert.Equal(expected, normalized.PopupVisualStyle);
+        Assert.False(normalized.UseClipboardFallback);
+        Assert.False(normalized.AiHistoryEnabled);
+        Assert.Empty(normalized.DeepSeekApiKey);
+    }
+
     [Fact]
     public void LoadPreferences_MalformedJsonReportsFailureWithoutReadingCredential()
     {

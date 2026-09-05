@@ -90,6 +90,8 @@ internal partial class PopupWindow : Window
     private int _selectionActionVersion;
     private bool _isBubbleVisualStyle;
     private bool _isBubbleV2VisualStyle;
+    private bool _isBubbleV3VisualStyle;
+    private bool UsesSculptedBubbleGeometry => _isBubbleV2VisualStyle || _isBubbleV3VisualStyle;
 
     public PopupWindow(
         long requestId,
@@ -355,6 +357,8 @@ internal partial class PopupWindow : Window
             && !SystemParameters.HighContrast;
         _isBubbleV2VisualStyle = _isBubbleVisualStyle
             && PopupVisualStyleCatalog.IsBubbleV2(normalizedStyle);
+        _isBubbleV3VisualStyle = _isBubbleVisualStyle
+            && PopupVisualStyleCatalog.IsBubbleV3(normalizedStyle);
 
         PopupSurface.Margin = _isBubbleVisualStyle
             ? new Thickness(
@@ -363,7 +367,7 @@ internal partial class PopupWindow : Window
                 CurrentBubbleHorizontalInset,
                 CurrentBubbleVerticalInset)
             : new Thickness(0);
-        PopupSurface.Padding = _isBubbleV2VisualStyle
+        PopupSurface.Padding = UsesSculptedBubbleGeometry
             ? new Thickness(17, 6, 17, 15)
             : new Thickness(16, 6, 16, 14);
         BubbleHighlight.Visibility = _isBubbleVisualStyle ? Visibility.Visible : Visibility.Collapsed;
@@ -376,6 +380,30 @@ internal partial class PopupWindow : Window
         }
 
         UpdatePopupSurfaceClip();
+        UpdateExplanationSurfacePresentation();
+    }
+
+    private void UpdateExplanationSurfacePresentation()
+    {
+        // Keep the original document and its selection/layout intact, but do not
+        // draw it through a transparent explanation or leave it mouse-interactive.
+        TranslationRichTextBox.Opacity = _isExplanationVisible ? 0 : 1;
+        TranslationRichTextBox.IsHitTestVisible = !_isExplanationVisible;
+        var readabilityEffect = _isBubbleV3VisualStyle ? LiquidGlassMaterial.TextReadabilityEffect : null;
+        TranslationRichTextBox.Effect = readabilityEffect;
+        ExplanationRichTextBox.Effect = readabilityEffect;
+        PopupSurface.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty,
+            _isBubbleV3VisualStyle && _isExplanationVisible ? "ExplanationSurfaceBrush" : "PopupBackgroundBrush");
+        if (_isBubbleV3VisualStyle)
+        {
+            // Use a single glass surface, not two stacked translucent panes.
+            ExplanationOverlay.Background = System.Windows.Media.Brushes.Transparent;
+        }
+        else
+        {
+            ExplanationOverlay.SetResourceReference(System.Windows.Controls.Panel.BackgroundProperty,
+                "ExplanationSurfaceBrush");
+        }
     }
 
     private void UpdateBubbleTailDirection(bool windowIsLeftOfAnchor)
@@ -388,11 +416,11 @@ internal partial class PopupWindow : Window
             : Visibility.Collapsed;
     }
 
-    private double CurrentBubbleHorizontalInset => _isBubbleV2VisualStyle
+    private double CurrentBubbleHorizontalInset => UsesSculptedBubbleGeometry
         ? BubbleV2HorizontalInset
         : BubbleHorizontalInset;
 
-    private double CurrentBubbleVerticalInset => _isBubbleV2VisualStyle
+    private double CurrentBubbleVerticalInset => UsesSculptedBubbleGeometry
         ? BubbleV2VerticalInset
         : BubbleVerticalInset;
 
@@ -402,16 +430,16 @@ internal partial class PopupWindow : Window
 
     private void ConfigureBubbleTailGeometry()
     {
-        BubbleLeftTail.Data = _isBubbleV2VisualStyle
+        BubbleLeftTail.Data = UsesSculptedBubbleGeometry
             ? BubbleV2LeftTailGeometry
             : LegacyBubbleLeftTailGeometry;
-        BubbleRightTail.Data = _isBubbleV2VisualStyle
+        BubbleRightTail.Data = UsesSculptedBubbleGeometry
             ? BubbleV2RightTailGeometry
             : LegacyBubbleRightTailGeometry;
-        WpfCanvas.SetLeft(BubbleLeftTail, _isBubbleV2VisualStyle ? 0 : 2);
-        WpfCanvas.SetRight(BubbleRightTail, _isBubbleV2VisualStyle ? 0 : 2);
-        WpfCanvas.SetTop(BubbleLeftTail, _isBubbleV2VisualStyle ? 30 : 31);
-        WpfCanvas.SetTop(BubbleRightTail, _isBubbleV2VisualStyle ? 30 : 31);
+        WpfCanvas.SetLeft(BubbleLeftTail, UsesSculptedBubbleGeometry ? 0 : 2);
+        WpfCanvas.SetRight(BubbleRightTail, UsesSculptedBubbleGeometry ? 0 : 2);
+        WpfCanvas.SetTop(BubbleLeftTail, UsesSculptedBubbleGeometry ? 30 : 31);
+        WpfCanvas.SetTop(BubbleRightTail, UsesSculptedBubbleGeometry ? 30 : 31);
     }
 
     internal void SelectTextForVisualTest(int start, int length)
@@ -478,9 +506,30 @@ internal partial class PopupWindow : Window
     internal bool IsExplanationVisibleForVisualTest() =>
         _isExplanationVisible && ExplanationOverlay.Visibility == Visibility.Visible;
 
+    internal bool HasHiddenTranslationForExplanationForVisualTest() =>
+        _isExplanationVisible
+        && TranslationRichTextBox.Opacity == 0
+        && !TranslationRichTextBox.IsHitTestVisible;
+
+    internal bool HasRestoredTranslationPresentationForVisualTest() =>
+        !_isExplanationVisible
+        && TranslationRichTextBox.Opacity == 1
+        && TranslationRichTextBox.IsHitTestVisible;
+
     internal bool IsBubbleVisualStyleForVisualTest() => _isBubbleVisualStyle;
 
     internal bool IsBubbleV2VisualStyleForVisualTest() => _isBubbleV2VisualStyle;
+
+    internal bool HasUsableGlassRimForVisualTest()
+    {
+        UpdateLayout();
+        return _isBubbleV3VisualStyle
+               && GlassSurfaceRim.IsGlassEnabled
+               && !GlassSurfaceRim.IsHitTestVisible
+               && Math.Abs(GlassSurfaceRim.ActualWidth - PopupSurface.ActualWidth) < 1
+               && Math.Abs(GlassSurfaceRim.ActualHeight - PopupSurface.ActualHeight) < 1
+               && Opacity == 1;
+    }
 
     internal bool HasUsableDragHandleForVisualTest()
     {
@@ -723,6 +772,7 @@ internal partial class PopupWindow : Window
             SchedulePositionNearAnchor();
         }
         _isExplanationVisible = true;
+        UpdateExplanationSurfacePresentation();
         _isExplanationComplete = false;
         _explanationRecordVersion++;
         _isExplanationRecordSaving = false;
@@ -816,6 +866,7 @@ internal partial class PopupWindow : Window
     {
         var wasVisible = _isExplanationVisible || ExplanationOverlay.Visibility == Visibility.Visible;
         _isExplanationVisible = false;
+        UpdateExplanationSurfacePresentation();
         _isExplanationComplete = false;
         _explanationRecordVersion++;
         _explanationText = string.Empty;

@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '0.7.1',
+    [string]$Version = '0.7.2',
 
     [string]$CertificateThumbprint = '',
 
@@ -173,6 +173,12 @@ try {
     Copy-Item -LiteralPath (Join-Path $projectRoot 'CHANGELOG.md') -Destination $stagingPackageDirectory
     Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination $stagingPackageDirectory
     Copy-Item -LiteralPath (Join-Path $projectRoot 'src\InstantTranslate.App\Assets\AppLogo.png') -Destination $stagingPackageDirectory
+
+    # Keep the packaged README's relative preview links usable offline.
+    $previewImagesDirectory = Join-Path $stagingPackageDirectory 'docs\images'
+    New-Item -ItemType Directory -Force -Path $previewImagesDirectory | Out-Null
+    Get-ChildItem -LiteralPath (Join-Path $projectRoot 'docs\images') -Filter '*.png' -File |
+        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $previewImagesDirectory }
 
     $zoteroIntegrationDirectory = Join-Path $stagingPackageDirectory 'Integrations\Zotero'
     New-Item -ItemType Directory -Force -Path $zoteroIntegrationDirectory | Out-Null

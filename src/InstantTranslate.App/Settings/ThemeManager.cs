@@ -51,6 +51,7 @@ internal static class ThemeManager
 
     internal static void ApplyHighContrast(ResourceDictionary resources)
     {
+        resources["PopupGlassEnabled"] = false;
         SetBrush(resources, "AppWindowBackgroundBrush", WpfSystemColors.WindowBrush);
         SetBrush(resources, "AppCardBackgroundBrush", WpfSystemColors.WindowBrush);
         SetBrush(resources, "AppCardBorderBrush", WpfSystemColors.WindowTextBrush);
@@ -112,6 +113,8 @@ internal static class ThemeManager
         {
             PopupVisualStyleCatalog.BubbleStyleId => CreateBubbleSurfaceBrush(),
             PopupVisualStyleCatalog.BubbleV2StyleId => CreateBubbleV2SurfaceBrush(),
+            PopupVisualStyleCatalog.BubbleV3StyleId => LiquidGlassMaterial.Surface,
+            PopupVisualStyleCatalog.BubbleV3ColorStyleId => LiquidGlassMaterial.ColorSurface,
             _ => CreateBrush(palette.PopupBackground),
         };
     }
@@ -126,12 +129,18 @@ internal static class ThemeManager
         resources[key] = brush;
     }
 
-    private static void ApplyPopupResources(
+    internal static void ApplyPopupResources(
         ResourceDictionary resources,
         ThemePalette palette,
         string popupVisualStyle)
     {
         var normalizedStyle = PopupVisualStyleCatalog.Normalize(popupVisualStyle);
+        resources["PopupGlassEnabled"] = false;
+        if (PopupVisualStyleCatalog.IsBubbleV3(normalizedStyle))
+        {
+            ApplyBubbleV3Resources(resources, palette, PopupVisualStyleCatalog.IsBubbleV3Color(normalizedStyle));
+            return;
+        }
         if (string.Equals(normalizedStyle, PopupVisualStyleCatalog.MinimalStyleId, StringComparison.Ordinal))
         {
             SetBrush(resources, "PopupBackgroundBrush", palette.PopupBackground);
@@ -209,8 +218,40 @@ internal static class ThemeManager
         SetEffect(resources, "PopupActionBarShadowEffect", CreateShadow(WpfColor.FromRgb(46, 67, 105), 0.12, 18, 5));
     }
 
+    private static void ApplyBubbleV3Resources(ResourceDictionary resources, ThemePalette palette, bool colorful)
+    {
+        resources["PopupGlassEnabled"] = true;
+        SetBrush(resources, "PopupBackgroundBrush", colorful ? LiquidGlassMaterial.ColorSurface : LiquidGlassMaterial.Surface);
+        SetBrush(resources, "PopupBorderBrush", WpfBrushes.Transparent);
+        SetBrush(resources, "PopupButtonBrush", colorful ? LiquidGlassMaterial.ColorToolbar : LiquidGlassMaterial.Toolbar);
+        SetBrush(resources, "PopupButtonHoverBrush", "#D9FFFFFF");
+        SetBrush(resources, "PopupButtonBorderBrush", "#899CAE");
+        SetBrush(resources, "PopupTextBrush", "#17232F");
+        SetBrush(resources, "PopupMutedBrush", "#4D6073");
+        SetBrush(resources, "PopupBadgeBrush", palette.Accent);
+        SetBrush(resources, "PopupHighlightBrush", WpfBrushes.Transparent);
+        SetBrush(resources, "PopupTailBrush", colorful ? "#50F2F4FF" : "#50F1F7FC");
+        SetBrush(resources, "PopupTailStrokeBrush", "#E6FFFFFF");
+        SetCornerRadius(resources, "PopupSurfaceCornerRadius", new CornerRadius(40));
+        SetCornerRadius(resources, "PopupActionBarCornerRadius", new CornerRadius(22));
+        SetCornerRadius(resources, "PopupButtonCornerRadius", new CornerRadius(12));
+        SetEffect(resources, "PopupSurfaceShadowEffect", CreateShadow(WpfColor.FromRgb(33, 51, 73), 0.20, 28, 7));
+        SetEffect(resources, "PopupActionBarShadowEffect", CreateShadow(WpfColor.FromRgb(33, 51, 73), 0.13, 18, 5));
+    }
+
     private static void ApplyExplanationResources(ResourceDictionary resources, string popupVisualStyle)
     {
+        if (PopupVisualStyleCatalog.IsBubbleV3(popupVisualStyle))
+        {
+            var colorful = PopupVisualStyleCatalog.IsBubbleV3Color(popupVisualStyle);
+            var surface = colorful ? LiquidGlassMaterial.ColorAuxiliarySurface : LiquidGlassMaterial.AuxiliarySurface;
+            SetBrush(resources, "ExplanationSurfaceBrush", surface);
+            SetBrush(resources, "ExplanationHeaderBrush", colorful ? "#24F1F3FC" : "#24EAF1F7");
+            SetBrush(resources, "QuestionAnswerSurfaceBrush", surface);
+            SetBrush(resources, "QuestionAnswerHeaderBrush", colorful ? "#24F7F7FD" : "#24F4F8FC");
+            SetBrush(resources, "QuestionInputBrush", "#88FFFFFF");
+            return;
+        }
         if (PopupVisualStyleCatalog.IsBubbleV2(popupVisualStyle))
         {
             SetBrush(resources, "ExplanationSurfaceBrush", CreateAuxiliarySurfaceBrush(

@@ -935,7 +935,17 @@
                                     <ComboBoxItem Content="Minimal" Tag="minimal" />
                                     <ComboBoxItem Content="Bubble" Tag="bubble" />
                                     <ComboBoxItem Content="Bubble 2.0" Tag="bubble-v2" />
+                                    <ComboBoxItem Content="Bubble 3.0 · Glass" Tag="bubble-v3" />
+                                    <ComboBoxItem Content="Bubble 3.0 · Color Glass" Tag="bubble-v3-color" />
                                 </ComboBox>
+                                <TextBlock x:Name="PopupStyleGlassHint"
+                                           Margin="0,6,0,0"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource AppMutedTextBrush}"
+                                           TextWrapping="Wrap"
+                                           Visibility="Collapsed"
+                                           Tag="loc:PopupStyleGlassHint"
+                                           Text="Liquid-glass edges with clear, readable text." />
                             </StackPanel>
                             <Grid Grid.Column="2"
                                   Width="112"

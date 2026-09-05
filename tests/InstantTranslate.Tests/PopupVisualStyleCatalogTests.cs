@@ -26,6 +26,32 @@ public sealed class PopupVisualStyleCatalogTests
     }
 
     [Theory]
+    [InlineData("bubble-v3")]
+    [InlineData("BUBBLE-V3")]
+    [InlineData(" bubble-v3 ")]
+    public void Normalize_BubbleV3Aliases_PreservesDistinctGlassStyle(string value)
+    {
+        Assert.Equal(PopupVisualStyleCatalog.BubbleV3StyleId, PopupVisualStyleCatalog.Normalize(value));
+        Assert.True(PopupVisualStyleCatalog.IsBubble(value));
+        Assert.True(PopupVisualStyleCatalog.IsBubbleV3(value));
+        Assert.False(PopupVisualStyleCatalog.IsBubbleV2(value));
+        Assert.False(PopupVisualStyleCatalog.IsBubbleV3Color(value));
+    }
+
+    [Theory]
+    [InlineData("bubble-v3-color")]
+    [InlineData("BUBBLE-V3-COLOR")]
+    [InlineData(" bubble-v3-color ")]
+    public void Normalize_ColorGlass_PreservesSeparateChoice(string value)
+    {
+        Assert.Equal(PopupVisualStyleCatalog.BubbleV3ColorStyleId, PopupVisualStyleCatalog.Normalize(value));
+        Assert.True(PopupVisualStyleCatalog.IsBubble(value));
+        Assert.True(PopupVisualStyleCatalog.IsBubbleV3(value));
+        Assert.True(PopupVisualStyleCatalog.IsBubbleV3Color(value));
+        Assert.False(PopupVisualStyleCatalog.IsBubbleV2(value));
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("minimal")]

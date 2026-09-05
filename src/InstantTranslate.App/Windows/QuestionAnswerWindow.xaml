@@ -226,5 +226,9 @@
                 </Border>
             </Grid>
         </Border>
+        <local:LiquidGlassRim x:Name="GlassSurfaceRim"
+                             Grid.Row="1"
+                             CornerRadius="{DynamicResource PopupSurfaceCornerRadius}"
+                             IsGlassEnabled="{DynamicResource PopupGlassEnabled}" />
     </Grid>
 </Window>

@@ -53,6 +53,10 @@ internal partial class SettingsWindow : Window
             ["PopupStyleMinimal"] = ("Minimal", "极简"),
             ["PopupStyleBubble"] = ("Bubble", "气泡"),
             ["PopupStyleBubbleV2"] = ("Bubble 2.0", "气泡 2.0"),
+            ["PopupStyleBubbleV3"] = ("Bubble 3.0 · Glass", "气泡 3.0 · 液态玻璃"),
+            ["PopupStyleBubbleV3Color"] = ("Bubble 3.0 · Color Glass", "气泡 3.0 · 彩色玻璃"),
+            ["PopupStyleGlassHint"] = ("See-through glass: your apps stay visible behind the surface.", "透明玻璃：可直接透出后方应用画面，文字保持不透明。"),
+            ["PopupStyleColorGlassHint"] = ("See-through glass with Bubble 2.0's pink, blue and lilac tint.", "透明玻璃配上气泡 2.0 的粉、蓝、紫色染，后方画面清晰可见。"),
             ["HighlightPalette"] = ("Highlight palette", "重点高亮配色"),
             ["HighlightPalettePreview"] = ("AI emphasis preview", "AI 强调预览"),
             ["HighlightPaletteDescription"] = ("DeepSeek marks only the most useful generated phrases. Copy, history, and saved records keep normal text.", "DeepSeek 仅标注 AI 生成内容中最值得注意的短语；复制、记录和历史始终保留普通正文。"),
@@ -425,6 +429,8 @@ internal partial class SettingsWindow : Window
         SetComboItemContent(PopupVisualStyleComboBox, "minimal", L("PopupStyleMinimal"));
         SetComboItemContent(PopupVisualStyleComboBox, "bubble", L("PopupStyleBubble"));
         SetComboItemContent(PopupVisualStyleComboBox, "bubble-v2", L("PopupStyleBubbleV2"));
+        SetComboItemContent(PopupVisualStyleComboBox, "bubble-v3", L("PopupStyleBubbleV3"));
+        SetComboItemContent(PopupVisualStyleComboBox, "bubble-v3-color", L("PopupStyleBubbleV3Color"));
         SetComboItemContent(HighlightPaletteComboBox, "clarity", L("HighlightPaletteClarity"));
         SetComboItemContent(HighlightPaletteComboBox, "morandi", L("HighlightPaletteMorandi"));
         SetComboItemContent(HighlightPaletteComboBox, "ocean", L("HighlightPaletteOcean"));
@@ -852,31 +858,39 @@ internal partial class SettingsWindow : Window
             PopupVisualStyleComboBox.SelectedValue as string);
         var isBubble = PopupVisualStyleCatalog.IsBubble(popupVisualStyle);
         var isBubbleV2 = PopupVisualStyleCatalog.IsBubbleV2(popupVisualStyle);
+        var isGlass = PopupVisualStyleCatalog.IsBubbleV3(popupVisualStyle);
+        var isColorGlass = PopupVisualStyleCatalog.IsBubbleV3Color(popupVisualStyle);
+        var isSculpted = isBubbleV2 || isGlass;
         var themeId = ColorThemeComboBox.SelectedValue as string ?? ThemeCatalog.DefaultThemeId;
         var palette = ThemeCatalog.Resolve(themeId, CustomAccentColorTextBox.Text);
-        var tailColor = isBubbleV2
+        var tailColor = isColorGlass ? "#50F2F4FF" : isGlass ? "#50F1F7FC" : isBubbleV2
             ? "#F2F4FF"
             : isBubble
                 ? "#EEF7FF"
                 : palette.PopupBackground;
 
         PopupStylePreviewSurface.Margin = isBubble
-            ? new Thickness(isBubbleV2 ? 14 : 12, 2, 0, 2)
+            ? new Thickness(isSculpted ? 14 : 12, 2, 0, 2)
             : new Thickness(0, 4, 0, 4);
-        PopupStylePreviewSurface.CornerRadius = new CornerRadius(isBubbleV2 ? 22 : isBubble ? 18 : 7);
-        PopupStylePreviewSurface.BorderThickness = new Thickness(isBubble ? 0 : 1);
+        PopupStylePreviewSurface.CornerRadius = new CornerRadius(isSculpted ? 22 : isBubble ? 18 : 7);
+        PopupStylePreviewSurface.BorderThickness = new Thickness(isGlass ? 1 : isBubble ? 0 : 1);
         PopupStylePreviewSurface.Background = ThemeManager.CreatePopupPreviewSurfaceBrush(
             popupVisualStyle,
             palette);
-        PopupStylePreviewSurface.BorderBrush = ThemeManager.CreateBrush(
+        PopupStylePreviewSurface.BorderBrush = isGlass ? LiquidGlassMaterial.Edge : ThemeManager.CreateBrush(
             isBubbleV2 ? "#FFFFFF" : isBubble ? "#C9D9EA" : palette.PopupBorder);
-        PopupStylePreviewTail.Data = System.Windows.Media.Geometry.Parse(isBubbleV2
+        PopupStylePreviewTail.Data = System.Windows.Media.Geometry.Parse(isSculpted
             ? "M0,6 C3,4 6,1.5 12,0 C10,3.8 10,8.2 12,12 C6,10.5 3,8 0,6 Z"
             : "M0,0 L12,6 L0,12 Z");
         PopupStylePreviewTail.Fill = ThemeManager.CreateBrush(tailColor);
-        PopupStylePreviewTail.Stroke = ThemeManager.CreateBrush(isBubbleV2 ? "#FFFFFF" : "#00FFFFFF");
-        PopupStylePreviewTail.StrokeThickness = isBubbleV2 ? 0.8 : 0;
+        PopupStylePreviewTail.Stroke = ThemeManager.CreateBrush(isSculpted ? "#FFFFFF" : "#00FFFFFF");
+        PopupStylePreviewTail.StrokeThickness = isSculpted ? 0.8 : 0;
         PopupStylePreviewTail.Visibility = isBubble ? Visibility.Visible : Visibility.Collapsed;
+        if (PopupStyleGlassHint is not null)
+        {
+            PopupStyleGlassHint.Text = L(isColorGlass ? "PopupStyleColorGlassHint" : "PopupStyleGlassHint");
+            PopupStyleGlassHint.Visibility = isGlass ? Visibility.Visible : Visibility.Collapsed;
+        }
     }
 
     private void UpdateProviderFields()

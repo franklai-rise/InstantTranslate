@@ -555,6 +555,7 @@ public partial class App : System.Windows.Application
         const long requestId = long.MaxValue - 1;
         try
         {
+            ThemeManager.Apply(AppSettings.Default);
             var anchor = new ScreenPoint(220, 170);
             _popupManager?.ShowTranslation(
                 requestId,
@@ -647,6 +648,8 @@ public partial class App : System.Windows.Application
             }
 
             VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-bubble-v2"));
+
+            await RunGlassSnapshotChecksAsync(window);
 
             ThemeManager.Apply(AppSettings.Default);
             window.ApplyAppearance(
@@ -757,6 +760,35 @@ public partial class App : System.Windows.Application
             }
 
             VisualSnapshotRenderer.SavePng(questionWindow, GetSnapshotPath("question-answer"));
+            foreach (var glassStyle in new[] { PopupVisualStyleCatalog.BubbleV3StyleId, PopupVisualStyleCatalog.BubbleV3ColorStyleId })
+            {
+                ThemeManager.Apply(AppSettings.Default with { PopupVisualStyle = glassStyle });
+                questionWindow.ApplyAppearance(
+                    UiLanguageCatalog.EnglishLanguageId,
+                    TranslationFontCatalog.DefaultEnglishFontFamily,
+                    TranslationFontCatalog.DefaultChineseFontFamily);
+                await Task.Delay(120);
+                if (!questionWindow.HasUsableGlassRimForVisualTest())
+                {
+                    throw new InvalidOperationException("问答窗切换气泡 3.0 后圆角裁切或玻璃边缘没有同步更新。");
+                }
+                VisualSnapshotRenderer.SaveOnBackdrop(questionWindow, GetSnapshotPath($"question-answer-{glassStyle}"), dark: false);
+            }
+            questionWindow.ApplyAppearance(
+                UiLanguageCatalog.SimplifiedChineseLanguageId,
+                TranslationFontCatalog.DefaultEnglishFontFamily,
+                TranslationFontCatalog.DefaultChineseFontFamily);
+            await Task.Delay(100);
+            VisualSnapshotRenderer.SaveOnBackdrop(questionWindow, GetSnapshotPath("question-answer-bubble-v3-color-zh"), dark: false);
+            ThemeManager.Apply(AppSettings.Default);
+            questionWindow.ApplyAppearance(
+                UiLanguageCatalog.EnglishLanguageId,
+                TranslationFontCatalog.DefaultEnglishFontFamily,
+                TranslationFontCatalog.DefaultChineseFontFamily);
+            if (!questionWindow.HasMatchingSurfaceClipForVisualTest())
+            {
+                throw new InvalidOperationException("问答窗切回简约样式后仍保留了气泡圆角裁切。");
+            }
             questionWindow.SetFontSizeForVisualTest(23);
             await Task.Delay(100);
             if (Math.Abs(questionWindow.TranscriptFontSizeForVisualTest - 23) > 0.1)
@@ -875,6 +907,14 @@ public partial class App : System.Windows.Application
             }
 
             VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-small"));
+            ApplyGlassAppearanceForVisualTest(window);
+            window.ApplySizePresetForVisualTest(WindowSizePreset.Wide);
+            await Task.Delay(120);
+            if (!window.HasUsableGlassRimForVisualTest())
+            {
+                throw new InvalidOperationException("气泡 3.0 缩放后玻璃边缘与正文表面没有对齐。");
+            }
+            VisualSnapshotRenderer.SaveOnBackdrop(window, GetSnapshotPath("popup-bubble-v3-resized"), dark: false);
         }
         catch (Exception exception)
         {
@@ -885,6 +925,83 @@ public partial class App : System.Windows.Application
         {
             ExitApplication();
         }
+    }
+
+    private static void ApplyGlassAppearanceForVisualTest(
+        PopupWindow window,
+        string glassStyle = PopupVisualStyleCatalog.BubbleV3StyleId)
+    {
+        ThemeManager.Apply(AppSettings.Default with { PopupVisualStyle = glassStyle });
+        window.ApplyAppearance(
+            TranslationFontCatalog.DefaultEnglishFontFamily,
+            TranslationFontCatalog.DefaultChineseFontFamily,
+            UiLanguageCatalog.EnglishLanguageId,
+            glassStyle);
+    }
+
+    private async Task RunGlassSnapshotChecksAsync(PopupWindow window)
+    {
+        foreach (var glassStyle in new[] { PopupVisualStyleCatalog.BubbleV3StyleId, PopupVisualStyleCatalog.BubbleV3ColorStyleId })
+        {
+            await RunGlassVariantSnapshotChecksAsync(window, glassStyle);
+        }
+
+        // Exercise system-color fallback without changing the user's OS settings.
+        ThemeManager.ApplyHighContrast(Resources);
+        window.ApplyAppearance(
+            TranslationFontCatalog.DefaultEnglishFontFamily,
+            TranslationFontCatalog.DefaultChineseFontFamily,
+            UiLanguageCatalog.EnglishLanguageId,
+            PopupVisualStyleCatalog.MinimalStyleId);
+        await Task.Delay(100);
+        VisualSnapshotRenderer.SavePng(window, GetSnapshotPath("popup-bubble-v3-system-colors"));
+    }
+
+    private async Task RunGlassVariantSnapshotChecksAsync(PopupWindow window, string glassStyle)
+    {
+        ApplyGlassAppearanceForVisualTest(window, glassStyle);
+        window.ConfigureViewportForVisualTest(780, 236, 16.5);
+        await Task.Delay(140);
+        if (!window.HasUsableGlassRimForVisualTest()
+            || !window.HasUsableDragHandleForVisualTest()
+            || !window.HasSingleRowExternalControlsForVisualTest())
+        {
+            throw new InvalidOperationException("气泡 3.0 的光学边缘、拖拽区或单行控件布局异常。");
+        }
+
+        VisualSnapshotRenderer.SavePng(window, GetSnapshotPath($"popup-{glassStyle}"));
+        VisualSnapshotRenderer.SaveOnBackdrop(window, GetSnapshotPath($"popup-{glassStyle}-light"), dark: false);
+        VisualSnapshotRenderer.SaveOnBackdrop(window, GetSnapshotPath($"popup-{glassStyle}-dark"), dark: true);
+        window.SelectTextForVisualTest(0, 34);
+        await Task.Delay(140);
+        if (!window.HasActiveSelectionForVisualTest() || !window.HasSelectionExplainButtonForVisualTest())
+        {
+            throw new InvalidOperationException("玻璃装饰影响了正文选择或选区解释按钮。");
+        }
+        VisualSnapshotRenderer.SaveOnBackdrop(window, GetSnapshotPath($"popup-{glassStyle}-selection"), dark: false);
+        window.ShowExplanationLoading();
+        if (!window.HasHiddenTranslationForExplanationForVisualTest())
+        {
+            throw new InvalidOperationException("透明解释加载层透出了原译文。");
+        }
+        window.ShowExplanation(
+            "释义：[[h1:简约不是删减能力]]，而是让每次操作更直接。\n\n要点：[[h2:direct and effortless]] 强调直观、轻松，不需要额外思考。\n\n语境：适合产品设计、交互体验和工作流程的表达。");
+        window.MarkExplanationComplete();
+        await Task.Delay(420);
+        if (!window.IsExplanationVisibleForVisualTest()
+            || !window.HasUsableGlassRimForVisualTest()
+            || !window.HasHiddenTranslationForExplanationForVisualTest())
+        {
+            throw new InvalidOperationException("气泡 3.0 解释层或玻璃边缘异常。");
+        }
+        VisualSnapshotRenderer.SaveOnBackdrop(window, GetSnapshotPath($"popup-{glassStyle}-explanation"), dark: false);
+        window.HideExplanation(notifyDismissed: false);
+        if (!window.HasActiveSelectionForVisualTest()
+            || !window.HasRestoredTranslationPresentationForVisualTest())
+        {
+            throw new InvalidOperationException("从玻璃解释层返回后原文选区丢失。");
+        }
+        window.SelectTextForVisualTest(0, 0);
     }
 
     private async Task RunAiSmokeTestAsync()
@@ -955,10 +1072,16 @@ public partial class App : System.Windows.Application
                 UiLanguage = UiLanguageCatalog.EnglishLanguageId,
                 ProviderId = "mock",
                 DeepSeekApiKey = string.Empty,
-                PopupVisualStyle = PopupVisualStyleCatalog.BubbleV2StyleId,
+                PopupVisualStyle = PopupVisualStyleCatalog.BubbleV3StyleId,
             });
             window.Show();
             await Task.Delay(350);
+            if (window.FindName("PopupVisualStyleComboBox") is not System.Windows.Controls.ComboBox styleComboBox
+                || styleComboBox.Items.Count != 5
+                || !Equals(styleComboBox.SelectedValue, PopupVisualStyleCatalog.BubbleV3StyleId))
+            {
+                throw new InvalidOperationException("设置页没有保留旧样式并正确选择气泡 3.0。");
+            }
             if (window.FindName("HighlightPaletteComboBox") is not System.Windows.Controls.ComboBox paletteComboBox
                 || paletteComboBox.Items.Count < 5)
             {
@@ -979,6 +1102,9 @@ public partial class App : System.Windows.Application
                 englishScrollViewer.ScrollToVerticalOffset(1180);
                 await Task.Delay(100);
                 VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-appearance-en"));
+                styleComboBox.SelectedValue = PopupVisualStyleCatalog.BubbleV3ColorStyleId;
+                await Task.Delay(100);
+                VisualSnapshotRenderer.SavePng(visual, GetSnapshotPath("settings-color-glass-en"));
             }
 
             window.Close();
@@ -987,7 +1113,7 @@ public partial class App : System.Windows.Application
                 UiLanguage = UiLanguageCatalog.SimplifiedChineseLanguageId,
                 ProviderId = "mock",
                 DeepSeekApiKey = string.Empty,
-                PopupVisualStyle = PopupVisualStyleCatalog.BubbleV2StyleId,
+                PopupVisualStyle = PopupVisualStyleCatalog.BubbleV3ColorStyleId,
             });
             window.Show();
             await Task.Delay(250);

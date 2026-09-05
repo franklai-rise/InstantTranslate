@@ -121,6 +121,11 @@ internal partial class QuestionAnswerWindow : Window
             ? isChinese ? "输入一个简单问题，DeepSeek 会直接回答。" : "Ask a quick question and get a direct DeepSeek answer."
             : isChinese ? "可以继续追问当前内容。" : "Ask a follow-up about the current content.";
         TranscriptBox.FontFamily = CreateFontFamily(isChinese ? chineseFontFamily : englishFontFamily);
+        TranscriptBox.Effect = System.Windows.Application.Current.Resources["PopupGlassEnabled"] is true
+            ? LiquidGlassMaterial.TextReadabilityEffect
+            : null;
+        // A theme change can change the corner radius without changing the window's size.
+        UpdateSurfaceClip();
     }
 
     internal void BeginQuestion(string question, bool isRetry)
@@ -292,6 +297,20 @@ internal partial class QuestionAnswerWindow : Window
 
     internal bool HasSingleRowExternalControlsForVisualTest() =>
         SizePresetBar.HasSingleRowLayoutForVisualTest();
+
+    internal bool HasMatchingSurfaceClipForVisualTest() =>
+        Surface.Clip is RectangleGeometry clip
+        && Math.Abs(clip.RadiusX - Surface.CornerRadius.TopLeft) < 0.1
+        && Math.Abs(clip.Rect.Width - Surface.ActualWidth) < 1
+        && Math.Abs(clip.Rect.Height - Surface.ActualHeight) < 1;
+
+    internal bool HasUsableGlassRimForVisualTest() =>
+        GlassSurfaceRim.IsGlassEnabled
+        && !GlassSurfaceRim.IsHitTestVisible
+        && Math.Abs(GlassSurfaceRim.ActualWidth - Surface.ActualWidth) < 1
+        && Math.Abs(GlassSurfaceRim.ActualHeight - Surface.ActualHeight) < 1
+        && HasMatchingSurfaceClipForVisualTest()
+        && Opacity == 1;
 
     internal void SetFontSizeForVisualTest(double value) => SizePresetBar.FontSizeValue = value;
 
@@ -642,6 +661,11 @@ internal partial class QuestionAnswerWindow : Window
 
     private void Surface_SizeChanged(object sender, SizeChangedEventArgs e)
     {
+        UpdateSurfaceClip();
+    }
+
+    private void UpdateSurfaceClip()
+    {
         if (Surface.ActualWidth <= 0 || Surface.ActualHeight <= 0)
         {
             return;
@@ -650,10 +674,12 @@ internal partial class QuestionAnswerWindow : Window
         var corner = System.Windows.Application.Current.Resources["PopupSurfaceCornerRadius"] is CornerRadius radius
             ? radius.TopLeft
             : 18;
-        Surface.Clip = new RectangleGeometry(
+        var clip = new RectangleGeometry(
             new Rect(0, 0, Surface.ActualWidth, Surface.ActualHeight),
             corner,
             corner);
+        clip.Freeze();
+        Surface.Clip = clip;
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)

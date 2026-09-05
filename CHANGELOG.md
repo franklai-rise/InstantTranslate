@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.2 - 2026-09-05
+
+### Added
+
+- Added optional Bubble 3.0 / Liquid Glass and Bubble 3.0 / Color Glass popup styles alongside Minimal, Bubble, and Bubble 2.0. Both preserve the sculpted 2.0 shape with translucent surfaces, thin optical highlights, and layered edge reflections. Color Glass retains 2.0's pink, cyan, and lilac palette; the original 2.0 style is unchanged.
+- Matched translation controls and auxiliary Q&A surfaces to the new material. Decorations are input-transparent and do not change selection, drag, resize, or copy behavior.
+- Glass rendering uses real per-pixel surface transparency with roughly 20–30% base tint opacity, shared frozen vector brushes, and no desktop capture, backdrop sampling, or continuous animations. Text remains opaque with a fine light glyph edge; high-contrast mode uses system colors without glass decoration.
+
+### Fixed
+
+- Update an already-open Q&A window's rounded clip when changing popup styles, even if the window dimensions stay the same.
+- Hide the original translation's drawing and mouse input while explaining, retaining its document and selection for return. Transparent explanations use a single material layer instead of a milky stacked cover, preventing the translation from showing through the explanation.
+- Include preview images in the Windows ZIP so the packaged README can display them offline.
+
+### Validation and limitations
+
+- Added settings, palette, theme-reset and actual WPF rendered-alpha tests; the complete suite now contains 373 passing tests. Translation/explanation/Q&A snapshots cover both glass styles, text selection, return behavior, resizing and system-color fallback.
+- Glass uses actual transparency, not desktop capture, real-time background blur or physical refraction. Busy or very dark backgrounds can reduce text contrast; existing opaque styles remain available.
+- Includes the existing v0.7.1 Edge PDF recovery changes. This appearance release does not add another Edge or Zotero fix; Zotero's built-in PDF reader compatibility remains unresolved and its existing plugin is unchanged.
+
 ## 0.7.1 - 2026-09-05
 
 ### Fixed
