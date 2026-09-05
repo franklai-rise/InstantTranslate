@@ -14,6 +14,7 @@ public sealed class LiquidGlassMaterialTests
                  {
                      LiquidGlassMaterial.Surface, LiquidGlassMaterial.AuxiliarySurface,
                      LiquidGlassMaterial.ColorSurface, LiquidGlassMaterial.ColorAuxiliarySurface,
+                     LiquidGlassMaterial.TextSurface, LiquidGlassMaterial.ColorTextSurface,
                      LiquidGlassMaterial.ColorToolbar,
                      LiquidGlassMaterial.Toolbar, LiquidGlassMaterial.Edge,
                      LiquidGlassMaterial.InnerEdge, LiquidGlassMaterial.TopReflection,
@@ -25,9 +26,6 @@ public sealed class LiquidGlassMaterialTests
         }
         Assert.Same(LiquidGlassMaterial.Surface,
             ThemeManager.CreatePopupPreviewSurfaceBrush("bubble-v3", ThemeCatalog.Resolve("blue", "")));
-        Assert.True(LiquidGlassMaterial.TextReadabilityEffect.IsFrozen);
-        Assert.Equal(0, LiquidGlassMaterial.TextReadabilityEffect.ShadowDepth);
-        Assert.InRange(LiquidGlassMaterial.TextReadabilityEffect.BlurRadius, 0, 2);
     }
 
     [Theory]
@@ -117,6 +115,32 @@ public sealed class LiquidGlassMaterialTests
     }
 
     [Theory]
+    [InlineData("bubble-v3")]
+    [InlineData("bubble-v3-color")]
+    public void GlassStylesUseSoftOpaqueRoundedTextCardsInsideTransparentShells(string style)
+    {
+        var resources = new ResourceDictionary();
+        ThemeManager.ApplyPopupResources(resources, ThemeCatalog.Resolve("blue", ""), style);
+
+        var card = Assert.IsType<LinearGradientBrush>(resources["PopupTextSurfaceBrush"]);
+        Assert.Same(style == "bubble-v3-color" ? LiquidGlassMaterial.ColorTextSurface : LiquidGlassMaterial.TextSurface, card);
+        Assert.All(card.GradientStops, stop =>
+        {
+            Assert.Equal(255, stop.Color.A);
+            Assert.NotEqual(System.Windows.Media.Colors.White, stop.Color);
+            Assert.InRange((int)stop.Color.R, 240, 251);
+            Assert.InRange((int)stop.Color.G, 240, 251);
+            Assert.InRange((int)stop.Color.B, 240, 251);
+        });
+        Assert.True(card.IsFrozen);
+        Assert.Equal(1, card.Opacity);
+        Assert.Equal(new CornerRadius(18), resources["PopupTextSurfaceCornerRadius"]);
+        Assert.Equal(new Thickness(12), resources["PopupTextSurfacePadding"]);
+        Assert.All(GetBaseGradient(Assert.IsType<DrawingBrush>(resources["PopupBackgroundBrush"])).GradientStops,
+            stop => Assert.InRange((int)stop.Color.A, 48, 80));
+    }
+
+    [Theory]
     [InlineData("bubble-v3", "minimal")]
     [InlineData("bubble-v3", "bubble")]
     [InlineData("bubble-v3", "bubble-v2")]
@@ -135,6 +159,9 @@ public sealed class LiquidGlassMaterialTests
         Assert.False((bool)resources["PopupGlassEnabled"]);
         Assert.NotSame(LiquidGlassMaterial.Surface, resources["PopupBackgroundBrush"]);
         Assert.NotSame(LiquidGlassMaterial.ColorSurface, resources["PopupBackgroundBrush"]);
+        Assert.Equal(0, Assert.IsType<SolidColorBrush>(resources["PopupTextSurfaceBrush"]).Color.A);
+        Assert.Equal(new CornerRadius(0), resources["PopupTextSurfaceCornerRadius"]);
+        Assert.Equal(new Thickness(0), resources["PopupTextSurfacePadding"]);
     }
 
     [Theory]
@@ -150,6 +177,9 @@ public sealed class LiquidGlassMaterialTests
         Assert.False((bool)resources["PopupGlassEnabled"]);
         Assert.Same(System.Windows.SystemColors.WindowBrush, resources["PopupBackgroundBrush"]);
         Assert.Same(System.Windows.SystemColors.WindowBrush, resources["ExplanationSurfaceBrush"]);
+        Assert.Same(System.Windows.SystemColors.WindowBrush, resources["PopupTextSurfaceBrush"]);
+        Assert.Equal(new CornerRadius(0), resources["PopupTextSurfaceCornerRadius"]);
+        Assert.Equal(new Thickness(0), resources["PopupTextSurfacePadding"]);
     }
 
     private static LinearGradientBrush GetBaseGradient(DrawingBrush brush) =>

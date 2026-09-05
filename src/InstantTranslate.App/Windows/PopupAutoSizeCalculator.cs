@@ -21,8 +21,12 @@ internal static class PopupAutoSizeCalculator
         double fontSize,
         double availableWidth,
         double availableHeight,
-        double actionBarWidth = 0)
+        double actionBarWidth = 0,
+        double additionalHorizontalPadding = 0,
+        double additionalVerticalPadding = 0)
     {
+        var horizontalChrome = HorizontalChrome + SafePadding(additionalHorizontalPadding);
+        var verticalChrome = VerticalChrome + SafePadding(additionalVerticalPadding);
         var safeFontSize = double.IsFinite(fontSize) && fontSize > 0 ? fontSize : 16.5;
         var safeAvailableWidth = double.IsFinite(availableWidth) && availableWidth > 0
             ? availableWidth
@@ -46,22 +50,24 @@ internal static class PopupAutoSizeCalculator
         var layoutUnits = Math.Max(totalUnits, longestLineUnits);
         var fontWidthScale = Math.Sqrt(safeFontSize / 16.5);
         var estimatedContentWidth = 260 + (Math.Sqrt(Math.Max(1, layoutUnits)) * 26 * fontWidthScale);
-        var estimatedWindowWidth = estimatedContentWidth + HorizontalChrome;
+        var estimatedWindowWidth = estimatedContentWidth + horizontalChrome;
         var desiredWidth = Math.Clamp(
             Math.Max(estimatedWindowWidth, actionBarWidth),
             minimumWidth,
             maximumWidth);
 
-        var contentWidth = Math.Max(160, desiredWidth - HorizontalChrome);
+        var contentWidth = Math.Max(160, desiredWidth - horizontalChrome);
         var unitsPerLine = Math.Max(8, contentWidth / (safeFontSize * 0.52));
         var wrappedLineCount = lines.Sum(lineUnits => Math.Max(1, (int)Math.Ceiling(lineUnits / unitsPerLine)));
-        var estimatedWindowHeight = VerticalChrome + (wrappedLineCount * safeFontSize * 1.45);
+        var estimatedWindowHeight = verticalChrome + (wrappedLineCount * safeFontSize * 1.45);
         var desiredHeight = Math.Clamp(estimatedWindowHeight, minimumHeight, maximumHeight);
 
         return new PopupAutoSize(
             Math.Round(desiredWidth, 1),
             Math.Round(desiredHeight, 1));
     }
+
+    private static double SafePadding(double value) => double.IsFinite(value) && value > 0 ? value : 0;
 
     private static IReadOnlyList<double> MeasureLineUnits(string? text)
     {

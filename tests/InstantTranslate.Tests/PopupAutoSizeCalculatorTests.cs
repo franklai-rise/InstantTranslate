@@ -5,6 +5,41 @@ namespace InstantTranslate.Tests;
 public sealed class PopupAutoSizeCalculatorTests
 {
     [Fact]
+    public void Calculate_ReservesSpaceForGlassTextCardWithoutReducingTextArea()
+    {
+        const string text = "One line.\nAnother line.\nA third line.";
+        var original = PopupAutoSizeCalculator.Calculate(text, 16.5, 1920, 1080);
+        var card = PopupAutoSizeCalculator.Calculate(text, 16.5, 1920, 1080,
+            additionalHorizontalPadding: 24, additionalVerticalPadding: 24);
+
+        Assert.Equal(original.Width + 24, card.Width, precision: 1);
+        Assert.Equal(original.Height + 24, card.Height, precision: 1);
+    }
+
+    [Fact]
+    public void Calculate_GlassPaddingStillRespectsScreenLimits()
+    {
+        var card = PopupAutoSizeCalculator.Calculate(new string('译', 5000), 34, 640, 420,
+            additionalHorizontalPadding: 24, additionalVerticalPadding: 24);
+
+        Assert.InRange(card.Width, 1, 640);
+        Assert.InRange(card.Height, 1, 420);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(-24)]
+    public void Calculate_IgnoresInvalidExtraPadding(double padding)
+    {
+        var original = PopupAutoSizeCalculator.Calculate("Short translation.", 16.5, 1920, 1080);
+        var invalid = PopupAutoSizeCalculator.Calculate("Short translation.", 16.5, 1920, 1080,
+            additionalHorizontalPadding: padding, additionalVerticalPadding: padding);
+
+        Assert.Equal(original, invalid);
+    }
+
+    [Fact]
     public void Calculate_GrowsWithTranslationLength()
     {
         var shortText = PopupAutoSizeCalculator.Calculate("Short translation.", 16.5, 1920, 1080);

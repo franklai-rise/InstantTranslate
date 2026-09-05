@@ -55,8 +55,8 @@ internal partial class SettingsWindow : Window
             ["PopupStyleBubbleV2"] = ("Bubble 2.0", "气泡 2.0"),
             ["PopupStyleBubbleV3"] = ("Bubble 3.0 · Glass", "气泡 3.0 · 液态玻璃"),
             ["PopupStyleBubbleV3Color"] = ("Bubble 3.0 · Color Glass", "气泡 3.0 · 彩色玻璃"),
-            ["PopupStyleGlassHint"] = ("See-through glass: your apps stay visible behind the surface.", "透明玻璃：可直接透出后方应用画面，文字保持不透明。"),
-            ["PopupStyleColorGlassHint"] = ("See-through glass with Bubble 2.0's pink, blue and lilac tint.", "透明玻璃配上气泡 2.0 的粉、蓝、紫色染，后方画面清晰可见。"),
+            ["PopupStyleGlassHint"] = ("See-through glass around a soft off-white, rounded text card.", "透明玻璃外层，正文使用略带灰蓝的雾白色圆角底板。"),
+            ["PopupStyleColorGlassHint"] = ("Pink, blue and lilac glass around a softly tinted, rounded text card.", "保留粉、蓝、紫色染的透明外层，正文使用略带灰紫的雾白色圆角底板。"),
             ["HighlightPalette"] = ("Highlight palette", "重点高亮配色"),
             ["HighlightPalettePreview"] = ("AI emphasis preview", "AI 强调预览"),
             ["HighlightPaletteDescription"] = ("DeepSeek marks only the most useful generated phrases. Copy, history, and saved records keep normal text.", "DeepSeek 仅标注 AI 生成内容中最值得注意的短语；复制、记录和历史始终保留普通正文。"),
@@ -877,6 +877,9 @@ internal partial class SettingsWindow : Window
         PopupStylePreviewSurface.Background = ThemeManager.CreatePopupPreviewSurfaceBrush(
             popupVisualStyle,
             palette);
+        PopupStylePreviewTextSurface.Background = isGlass && !SystemParameters.HighContrast
+            ? isColorGlass ? LiquidGlassMaterial.ColorTextSurface : LiquidGlassMaterial.TextSurface
+            : System.Windows.Media.Brushes.Transparent;
         PopupStylePreviewSurface.BorderBrush = isGlass ? LiquidGlassMaterial.Edge : ThemeManager.CreateBrush(
             isBubbleV2 ? "#FFFFFF" : isBubble ? "#C9D9EA" : palette.PopupBorder);
         PopupStylePreviewTail.Data = System.Windows.Media.Geometry.Parse(isSculpted

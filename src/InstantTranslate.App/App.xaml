@@ -38,6 +38,9 @@
         <SolidColorBrush x:Key="ContentHighlightTertiaryBackgroundBrush" Color="#FFF3D8" />
         <SolidColorBrush x:Key="PopupHighlightBrush" Color="#00FFFFFF" />
         <sys:Boolean x:Key="PopupGlassEnabled">False</sys:Boolean>
+        <SolidColorBrush x:Key="PopupTextSurfaceBrush" Color="Transparent" />
+        <CornerRadius x:Key="PopupTextSurfaceCornerRadius">0</CornerRadius>
+        <Thickness x:Key="PopupTextSurfacePadding">0</Thickness>
         <SolidColorBrush x:Key="PopupTailBrush" Color="#F7F7F8" />
         <SolidColorBrush x:Key="PopupTailStrokeBrush" Color="#00FFFFFF" />
         <CornerRadius x:Key="PopupSurfaceCornerRadius">12</CornerRadius>

@@ -152,9 +152,15 @@
                     </Grid>
                 </Border>
 
+                <Border x:Name="TranscriptTextSurface"
+                        Grid.Row="1"
+                        Margin="16,12"
+                        Background="{DynamicResource PopupTextSurfaceBrush}"
+                        CornerRadius="{DynamicResource PopupTextSurfaceCornerRadius}"
+                        Padding="{DynamicResource PopupTextSurfacePadding}">
+                <Grid>
                 <TextBlock x:Name="EmptyStateText"
-                           Grid.Row="1"
-                           Margin="28"
+                           Margin="12,16"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"
                            Foreground="{DynamicResource PopupMutedBrush}"
@@ -165,8 +171,7 @@
                            Text="Ask a quick question." />
 
                 <RichTextBox x:Name="TranscriptBox"
-                             Grid.Row="1"
-                             Margin="16,12"
+                             Margin="0"
                              Padding="0"
                              Background="Transparent"
                              Foreground="{DynamicResource PopupTextBrush}"
@@ -182,6 +187,8 @@
                              SelectionOpacity="0.42"
                              VerticalScrollBarVisibility="Auto"
                              HorizontalScrollBarVisibility="Disabled" />
+                </Grid>
+                </Border>
 
                 <Border Grid.Row="2"
                         Margin="12,0,12,12"

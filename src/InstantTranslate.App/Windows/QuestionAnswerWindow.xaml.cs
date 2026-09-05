@@ -121,9 +121,6 @@ internal partial class QuestionAnswerWindow : Window
             ? isChinese ? "输入一个简单问题，DeepSeek 会直接回答。" : "Ask a quick question and get a direct DeepSeek answer."
             : isChinese ? "可以继续追问当前内容。" : "Ask a follow-up about the current content.";
         TranscriptBox.FontFamily = CreateFontFamily(isChinese ? chineseFontFamily : englishFontFamily);
-        TranscriptBox.Effect = System.Windows.Application.Current.Resources["PopupGlassEnabled"] is true
-            ? LiquidGlassMaterial.TextReadabilityEffect
-            : null;
         // A theme change can change the corner radius without changing the window's size.
         UpdateSurfaceClip();
     }
@@ -311,6 +308,19 @@ internal partial class QuestionAnswerWindow : Window
         && Math.Abs(GlassSurfaceRim.ActualHeight - Surface.ActualHeight) < 1
         && HasMatchingSurfaceClipForVisualTest()
         && Opacity == 1;
+
+    internal bool HasReadableGlassTextSurfaceForVisualTest() =>
+        TranscriptTextSurface.Background is LinearGradientBrush brush
+        && brush.GradientStops.All(stop => stop.Color.A == 255
+            && stop.Color != System.Windows.Media.Colors.White)
+        && brush.Opacity == 1
+        && TranscriptTextSurface.Opacity == 1
+        && TranscriptTextSurface.CornerRadius == new CornerRadius(18)
+        && TranscriptTextSurface.Padding == new Thickness(12)
+        && TranscriptTextSurface.ActualWidth >= TranscriptBox.ActualWidth + 23
+        && TranscriptTextSurface.ActualHeight >= TranscriptBox.ActualHeight + 23
+        && TranscriptBox.IsHitTestVisible
+        && TranscriptBox.Effect is null;
 
     internal void SetFontSizeForVisualTest(double value) => SizePresetBar.FontSizeValue = value;
 

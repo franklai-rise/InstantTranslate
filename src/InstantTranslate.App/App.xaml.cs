@@ -768,9 +768,10 @@ public partial class App : System.Windows.Application
                     TranslationFontCatalog.DefaultEnglishFontFamily,
                     TranslationFontCatalog.DefaultChineseFontFamily);
                 await Task.Delay(120);
-                if (!questionWindow.HasUsableGlassRimForVisualTest())
+                if (!questionWindow.HasUsableGlassRimForVisualTest()
+                    || !questionWindow.HasReadableGlassTextSurfaceForVisualTest())
                 {
-                    throw new InvalidOperationException("问答窗切换气泡 3.0 后圆角裁切或玻璃边缘没有同步更新。");
+                    throw new InvalidOperationException("问答窗切换气泡 3.0 后雾白正文卡片、圆角裁切或玻璃边缘没有同步更新。");
                 }
                 VisualSnapshotRenderer.SaveOnBackdrop(questionWindow, GetSnapshotPath($"question-answer-{glassStyle}"), dark: false);
             }
@@ -910,7 +911,9 @@ public partial class App : System.Windows.Application
             ApplyGlassAppearanceForVisualTest(window);
             window.ApplySizePresetForVisualTest(WindowSizePreset.Wide);
             await Task.Delay(120);
-            if (!window.HasUsableGlassRimForVisualTest())
+            if (!window.HasUsableGlassRimForVisualTest()
+                || !window.HasReadableGlassTextSurfaceForVisualTest()
+                || !window.HasVerticalOverflowForVisualTest())
             {
                 throw new InvalidOperationException("气泡 3.0 缩放后玻璃边缘与正文表面没有对齐。");
             }
@@ -963,6 +966,7 @@ public partial class App : System.Windows.Application
         window.ConfigureViewportForVisualTest(780, 236, 16.5);
         await Task.Delay(140);
         if (!window.HasUsableGlassRimForVisualTest()
+            || !window.HasReadableGlassTextSurfaceForVisualTest()
             || !window.HasUsableDragHandleForVisualTest()
             || !window.HasSingleRowExternalControlsForVisualTest())
         {
@@ -990,6 +994,7 @@ public partial class App : System.Windows.Application
         await Task.Delay(420);
         if (!window.IsExplanationVisibleForVisualTest()
             || !window.HasUsableGlassRimForVisualTest()
+            || !window.HasReadableGlassTextSurfaceForVisualTest()
             || !window.HasHiddenTranslationForExplanationForVisualTest())
         {
             throw new InvalidOperationException("气泡 3.0 解释层或玻璃边缘异常。");
@@ -997,6 +1002,7 @@ public partial class App : System.Windows.Application
         VisualSnapshotRenderer.SaveOnBackdrop(window, GetSnapshotPath($"popup-{glassStyle}-explanation"), dark: false);
         window.HideExplanation(notifyDismissed: false);
         if (!window.HasActiveSelectionForVisualTest()
+            || !window.HasReadableGlassTextSurfaceForVisualTest()
             || !window.HasRestoredTranslationPresentationForVisualTest())
         {
             throw new InvalidOperationException("从玻璃解释层返回后原文选区丢失。");

@@ -52,6 +52,9 @@ internal static class ThemeManager
     internal static void ApplyHighContrast(ResourceDictionary resources)
     {
         resources["PopupGlassEnabled"] = false;
+        SetBrush(resources, "PopupTextSurfaceBrush", WpfSystemColors.WindowBrush);
+        SetCornerRadius(resources, "PopupTextSurfaceCornerRadius", new CornerRadius(0));
+        resources["PopupTextSurfacePadding"] = new Thickness(0);
         SetBrush(resources, "AppWindowBackgroundBrush", WpfSystemColors.WindowBrush);
         SetBrush(resources, "AppCardBackgroundBrush", WpfSystemColors.WindowBrush);
         SetBrush(resources, "AppCardBorderBrush", WpfSystemColors.WindowTextBrush);
@@ -136,6 +139,9 @@ internal static class ThemeManager
     {
         var normalizedStyle = PopupVisualStyleCatalog.Normalize(popupVisualStyle);
         resources["PopupGlassEnabled"] = false;
+        SetBrush(resources, "PopupTextSurfaceBrush", WpfBrushes.Transparent);
+        SetCornerRadius(resources, "PopupTextSurfaceCornerRadius", new CornerRadius(0));
+        resources["PopupTextSurfacePadding"] = new Thickness(0);
         if (PopupVisualStyleCatalog.IsBubbleV3(normalizedStyle))
         {
             ApplyBubbleV3Resources(resources, palette, PopupVisualStyleCatalog.IsBubbleV3Color(normalizedStyle));
@@ -221,6 +227,11 @@ internal static class ThemeManager
     private static void ApplyBubbleV3Resources(ResourceDictionary resources, ThemePalette palette, bool colorful)
     {
         resources["PopupGlassEnabled"] = true;
+        SetBrush(resources, "PopupTextSurfaceBrush", colorful ? LiquidGlassMaterial.ColorTextSurface : LiquidGlassMaterial.TextSurface);
+        SetCornerRadius(resources, "PopupTextSurfaceCornerRadius", new CornerRadius(18));
+        // Inset the complete text viewport, including scrollbars and selection,
+        // so none of it can paint over the card's rounded corners.
+        resources["PopupTextSurfacePadding"] = new Thickness(12);
         SetBrush(resources, "PopupBackgroundBrush", colorful ? LiquidGlassMaterial.ColorSurface : LiquidGlassMaterial.Surface);
         SetBrush(resources, "PopupBorderBrush", WpfBrushes.Transparent);
         SetBrush(resources, "PopupButtonBrush", colorful ? LiquidGlassMaterial.ColorToolbar : LiquidGlassMaterial.Toolbar);

@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 using Color = System.Windows.Media.Color;
 using Point = System.Windows.Point;
 
@@ -19,7 +18,14 @@ internal static class LiquidGlassMaterial
     internal static DrawingBrush AuxiliarySurface { get; } = CreateSurface(auxiliary: true);
     internal static DrawingBrush ColorSurface { get; } = CreateSurface(auxiliary: false, colorful: true);
     internal static DrawingBrush ColorAuxiliarySurface { get; } = CreateSurface(auxiliary: true, colorful: true);
-    internal static DropShadowEffect TextReadabilityEffect { get; } = CreateTextReadabilityEffect();
+    // Opaque, gently tinted reading cards keep desktop details out of the text
+    // while matching each surrounding glass palette without a stark white edge.
+    internal static LinearGradientBrush TextSurface { get; } = Gradient(
+        new Point(0, 0), new Point(0.35, 1),
+        ("#F7F9FB", 0), ("#F1F4F8", 1));
+    internal static LinearGradientBrush ColorTextSurface { get; } = Gradient(
+        new Point(0, 0), new Point(0.65, 1),
+        ("#FAF8FB", 0), ("#F3F0F7", 1));
     internal static LinearGradientBrush Toolbar { get; } = Gradient(
         new Point(0, 0), new Point(0, 1),
         ("#90FFFFFF", 0), ("#70F3F7FC", 0.42), ("#64DEE8F3", 1));
@@ -116,19 +122,4 @@ internal static class LiquidGlassMaterial
     private static Color Parse(string value) =>
         (Color)System.Windows.Media.ColorConverter.ConvertFromString(value);
 
-    private static DropShadowEffect CreateTextReadabilityEffect()
-    {
-        // A very fine light edge around glyphs, not an opaque panel behind text.
-        // It keeps dark text distinguishable over darker desktop backgrounds.
-        var effect = new DropShadowEffect
-        {
-            Color = Colors.White,
-            Opacity = 0.9,
-            ShadowDepth = 0,
-            BlurRadius = 2.0,
-            RenderingBias = RenderingBias.Performance,
-        };
-        effect.Freeze();
-        return effect;
-    }
 }

@@ -966,6 +966,12 @@
                                         BorderBrush="{DynamicResource AppFieldBorderBrush}"
                                         BorderThickness="1"
                                         CornerRadius="7">
+                                    <Grid>
+                                    <Border x:Name="PopupStylePreviewTextSurface"
+                                            Margin="8,5"
+                                            Background="Transparent"
+                                            CornerRadius="9"
+                                            IsHitTestVisible="False" />
                                     <StackPanel Margin="12,0"
                                                 VerticalAlignment="Center"
                                                 Orientation="Horizontal">
@@ -979,6 +985,7 @@
                                                 Background="{DynamicResource AppCardBorderBrush}"
                                                 CornerRadius="2" />
                                     </StackPanel>
+                                    </Grid>
                                 </Border>
                             </Grid>
                         </Grid>

@@ -396,6 +396,11 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
+                <Border x:Name="TranslationTextSurface"
+                        Background="{DynamicResource PopupTextSurfaceBrush}"
+                        CornerRadius="{DynamicResource PopupTextSurfaceCornerRadius}"
+                        Padding="{DynamicResource PopupTextSurfacePadding}">
+                <Grid>
                 <StackPanel x:Name="LoadingPanel"
                             MinWidth="150"
                             Margin="0"
@@ -453,6 +458,8 @@
                         </ContextMenu>
                     </RichTextBox.ContextMenu>
                 </RichTextBox>
+                </Grid>
+                </Border>
 
                 <Canvas x:Name="SelectionActionLayer"
                         Panel.ZIndex="10"
@@ -527,8 +534,13 @@
                         </Grid>
                     </Border>
 
-                    <Grid Grid.Row="1"
-                          Margin="12,10">
+                    <Border x:Name="ExplanationTextSurface"
+                            Grid.Row="1"
+                            Margin="12,10"
+                            Background="{DynamicResource PopupTextSurfaceBrush}"
+                            CornerRadius="{DynamicResource PopupTextSurfaceCornerRadius}"
+                            Padding="{DynamicResource PopupTextSurfacePadding}">
+                    <Grid>
                         <TextBlock x:Name="ExplanationStatusText"
                                    MaxWidth="520"
                                    VerticalAlignment="Center"
@@ -580,6 +592,7 @@
                             </RichTextBox.ContextMenu>
                         </RichTextBox>
                     </Grid>
+                    </Border>
                 </Grid>
 
                 <Grid Grid.Row="1">

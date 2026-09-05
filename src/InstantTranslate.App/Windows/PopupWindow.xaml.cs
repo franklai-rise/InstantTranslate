@@ -389,9 +389,10 @@ internal partial class PopupWindow : Window
         // draw it through a transparent explanation or leave it mouse-interactive.
         TranslationRichTextBox.Opacity = _isExplanationVisible ? 0 : 1;
         TranslationRichTextBox.IsHitTestVisible = !_isExplanationVisible;
-        var readabilityEffect = _isBubbleV3VisualStyle ? LiquidGlassMaterial.TextReadabilityEffect : null;
-        TranslationRichTextBox.Effect = readabilityEffect;
-        ExplanationRichTextBox.Effect = readabilityEffect;
+        // Also hide the translation's reading card without collapsing its layout.
+        // Returning restores the same document, selection and viewport size.
+        TranslationTextSurface.Opacity = _isExplanationVisible ? 0 : 1;
+        TranslationTextSurface.IsHitTestVisible = !_isExplanationVisible;
         PopupSurface.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty,
             _isBubbleV3VisualStyle && _isExplanationVisible ? "ExplanationSurfaceBrush" : "PopupBackgroundBrush");
         if (_isBubbleV3VisualStyle)
@@ -509,12 +510,34 @@ internal partial class PopupWindow : Window
     internal bool HasHiddenTranslationForExplanationForVisualTest() =>
         _isExplanationVisible
         && TranslationRichTextBox.Opacity == 0
-        && !TranslationRichTextBox.IsHitTestVisible;
+        && !TranslationRichTextBox.IsHitTestVisible
+        && TranslationTextSurface.Opacity == 0
+        && !TranslationTextSurface.IsHitTestVisible;
 
     internal bool HasRestoredTranslationPresentationForVisualTest() =>
         !_isExplanationVisible
         && TranslationRichTextBox.Opacity == 1
-        && TranslationRichTextBox.IsHitTestVisible;
+        && TranslationRichTextBox.IsHitTestVisible
+        && TranslationTextSurface.Opacity == 1
+        && TranslationTextSurface.IsHitTestVisible;
+
+    internal bool HasReadableGlassTextSurfaceForVisualTest()
+    {
+        UpdateLayout();
+        var surface = _isExplanationVisible ? ExplanationTextSurface : TranslationTextSurface;
+        var textBox = _isExplanationVisible ? ExplanationRichTextBox : TranslationRichTextBox;
+        return surface.Background is LinearGradientBrush brush
+               && brush.GradientStops.All(stop => stop.Color.A == 255
+                   && stop.Color != System.Windows.Media.Colors.White)
+               && brush.Opacity == 1
+               && surface.Opacity == 1
+               && surface.CornerRadius == new CornerRadius(18)
+               && surface.Padding == new Thickness(12)
+               && surface.ActualWidth >= textBox.ActualWidth + 23
+               && surface.ActualHeight >= textBox.ActualHeight + 23
+               && textBox.IsHitTestVisible
+               && textBox.Effect is null;
+    }
 
     internal bool IsBubbleVisualStyleForVisualTest() => _isBubbleVisualStyle;
 
@@ -1822,7 +1845,9 @@ internal partial class PopupWindow : Window
             SizePresetBar.FontSizeValue,
             surfaceMaximumWidth,
             surfaceMaximumHeight,
-            Math.Max(0, HeaderBarGrid.DesiredSize.Width - PopupSurfaceHorizontalInset));
+            Math.Max(0, HeaderBarGrid.DesiredSize.Width - PopupSurfaceHorizontalInset),
+            TranslationTextSurface.Padding.Left + TranslationTextSurface.Padding.Right,
+            TranslationTextSurface.Padding.Top + TranslationTextSurface.Padding.Bottom);
 
         var currentWidth = IsVisible && ActualWidth > 0 ? ActualWidth : 0;
         var currentHeight = IsVisible && ActualHeight > 0 ? ActualHeight : 0;

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Both Bubble 3.0 glass styles now place translation, explanation/code analysis, and Q&A/DeepSeek chat text on opaque rounded reading cards. Soft off-white gradients pick up a faint gray-blue (Glass) or gray-lilac (Color Glass) tint instead of stark pure white. The outer glass, toolbar, tail and Color Glass tints remain translucent.
+- Inset the text viewports and scrollbars from the card corners, account for card padding during automatic sizing, and remove the now-unnecessary glyph halo. Returning from an explanation preserves the original selection and size.
+- Older popup styles keep their existing backgrounds and spacing. High-contrast mode uses system colors instead of off-white cards; settings previews describe the new glass-shell/reading-card appearance.
+
 ## 0.7.2 - 2026-09-05
 
 ### Added

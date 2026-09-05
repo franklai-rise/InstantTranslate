@@ -10,13 +10,15 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 
 ## 效果预览
 
+当前开发版：透明玻璃外层搭配柔和雾白色圆角正文底板。下面图片为实际 WPF 窗体渲染。
+
 ### Bubble 3.0 · 彩色透明玻璃
 
-![Bubble 3.0 彩色透明玻璃](docs/images/InstantTranslate-popup-bubble-v3-color-light-preview.png)
+![Bubble 3.0 彩色玻璃与雾白正文](docs/images/InstantTranslate-popup-bubble-v3-color-soft-white-preview.png)
 
 ### Bubble 3.0 · 冰灰透明玻璃
 
-![Bubble 3.0 冰灰透明玻璃](docs/images/InstantTranslate-popup-bubble-v3-light-preview.png)
+![Bubble 3.0 冰灰玻璃与雾白正文](docs/images/InstantTranslate-popup-bubble-v3-soft-white-preview.png)
 
 以上为实际 WPF 窗体渲染，后方色带是用于演示透明度的合成背景，不是桌面截图或背景模糊效果。
 
@@ -26,7 +28,7 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 
 ### AI Explain · 透明玻璃
 
-![AI Explain 透明玻璃解释界面](docs/images/InstantTranslate-popup-bubble-v3-color-explanation-preview.png)
+![AI Explain 雾白正文与透明玻璃](docs/images/InstantTranslate-popup-bubble-v3-explanation-soft-white-preview.png)
 
 ## 15 秒开始使用
 
@@ -46,6 +48,8 @@ InstantTranslate 是一个个人自用、可开源的 Windows 划词翻译工具
 - 默认仍不模拟按键、不改写剪贴板；本次不包含 Zotero 兼容修复。
 
 ## v0.7.2：Bubble 3.0 · 透明玻璃
+
+当前开发版调整（尚未发布为 Release）：两款气泡 3.0 的翻译、解释/代码分析和问答/DeepSeek 聊天正文改为**雾白色圆角底板**：冰灰版略带灰蓝，彩色版略带灰紫，使用很浅的渐变而非纯白。正文底板保持不透明以隔开后方画面，外层玻璃、尾巴和工具栏仍透明，彩色版保留粉蓝紫色染。正文和滚动条与圆角之间留有内边距，不再使用浅色字缘。其他样式保持不变。上方效果图展示当前开发版；下方 v0.7.2 说明及该 Release 下载包仍对应已发布版本。
 
 设置中的 `Popup style` 新增两个独立选项：
 
