@@ -2,8 +2,18 @@
 
 ## Unreleased
 
+### Fixed
+
+- Reject incomplete or unsuccessful AI stream endings instead of marking truncated text as a completed translation, explanation or answer. Bound individual SSE lines and aggregate response text to protect against malformed responses, without changing normal output budgets or prompts.
+- Defer iterator disposal until an in-flight stream read finishes after cancellation or timeout; retain its physical concurrency slot until cleanup completes, and observe late faults without exposing their content.
+- Preserve unsaved translation corrections, selection and undo state when appearance settings refresh. Reject oversized translation-memory writes before replacing the readable file, skip invalid null entries, and report unreadable-memory saves through the existing recoverable error path.
+- Make daily-record tests deterministic around midnight; the application's local-date grouping behavior is unchanged.
+- Clarify that translation targets the selected passage, not the translator's instructions. Detect clear instruction-echo responses for unrelated source passages, fail them before successful completion/cache insertion, and bypass matching polluted cache/memory results and prompt examples without deleting user data. This conservative guard does not reject legitimate translation-related source material and is not a general semantic validator.
+- Add an opt-in live translation regression mode for the reported Scratch assignment; it checks Chinese task content without saving the response or credentials.
+
 ### Changed
 
+- Code analysis now requests compact, clearly separated sections plus an item-by-item abbreviation/naming guide: English full forms, Chinese meanings, likely naming rationale, and common usage conventions. Ambiguous names and conventional symbols must not be given invented expansions. The code-only output budget is 3072 tokens; ordinary translation, explanation and chat budgets are unchanged.
 - Both Bubble 3.0 glass styles now place translation, explanation/code analysis, and Q&A/DeepSeek chat text on opaque rounded reading cards. Soft off-white gradients pick up a faint gray-blue (Glass) or gray-lilac (Color Glass) tint instead of stark pure white. The outer glass, toolbar, tail and Color Glass tints remain translucent.
 - Inset the text viewports and scrollbars from the card corners, account for card padding during automatic sizing, and remove the now-unnecessary glyph halo. Returning from an explanation preserves the original selection and size.
 - Older popup styles keep their existing backgrounds and spacing. High-contrast mode uses system colors instead of off-white cards; settings previews describe the new glass-shell/reading-card appearance.

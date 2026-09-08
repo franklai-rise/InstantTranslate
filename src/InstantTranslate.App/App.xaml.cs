@@ -66,12 +66,13 @@ public partial class App : System.Windows.Application
         var isSettingsSnapshotTest = e.Args.Contains("--settings-snapshot-test", StringComparer.OrdinalIgnoreCase);
         var isSettingsLifecycleTest = e.Args.Contains("--settings-lifecycle-test", StringComparer.OrdinalIgnoreCase);
         var isAiSmokeTest = e.Args.Contains("--ai-smoke-test", StringComparer.OrdinalIgnoreCase);
+        var isTranslationQualityTest = e.Args.Contains("--translation-quality-smoke-test", StringComparer.OrdinalIgnoreCase);
         var isVisualTest = isPopupSmokeTest
                            || isSmokeTest
                            || isPopupSnapshotTest
                            || isSettingsSnapshotTest
                            || isSettingsLifecycleTest
-                           || isAiSmokeTest;
+                           || isAiSmokeTest || isTranslationQualityTest;
         if (!isVisualTest)
         {
             _singleInstance = SingleInstanceCoordinator.AcquireWithTakeoverRetry();
@@ -91,7 +92,7 @@ public partial class App : System.Windows.Application
         // Reading Windows Credential Manager can be slow while the interactive
         // desktop is still starting. Load ordinary preferences synchronously,
         // then recover the secret off the UI thread after tray/input are live.
-        _settings = isAiSmokeTest ? _settingsStore.Load() : _settingsStore.LoadPreferences();
+        _settings = isAiSmokeTest || isTranslationQualityTest ? _settingsStore.Load() : _settingsStore.LoadPreferences();
         if (_settingsStore.SettingsReadFailed)
         {
             _healthJournal.Record(RuntimeHealthEvent.SettingsReadFailed);
@@ -106,10 +107,10 @@ public partial class App : System.Windows.Application
 
         // Visual review modes render only our own WPF windows. They deliberately
         // skip global hooks, hotkeys, tray integration, and startup registration.
-        if (isAiSmokeTest)
+        if (isAiSmokeTest || isTranslationQualityTest)
         {
             _translationProviderFactory = new TranslationProviderFactory();
-            _ = RunAiSmokeTestAsync();
+            _ = isTranslationQualityTest ? RunTranslationQualitySmokeTestAsync() : RunAiSmokeTestAsync();
             return;
         }
 
@@ -918,6 +919,10 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException("气泡 3.0 缩放后玻璃边缘与正文表面没有对齐。");
             }
             VisualSnapshotRenderer.SaveOnBackdrop(window, GetSnapshotPath("popup-bubble-v3-resized"), dark: false);
+            if (!window.VerifyAppearancePreservesEditForVisualTest(PopupVisualStyleCatalog.BubbleV3StyleId))
+            {
+                throw new InvalidOperationException("外观刷新丢失了未保存的修正、选区或撤销记录。");
+            }
         }
         catch (Exception exception)
         {
@@ -1008,6 +1013,54 @@ public partial class App : System.Windows.Application
             throw new InvalidOperationException("从玻璃解释层返回后原文选区丢失。");
         }
         window.SelectTextForVisualTest(0, 0);
+    }
+
+    private async Task RunTranslationQualitySmokeTestAsync()
+    {
+        try
+        {
+            if (_translationProviderFactory is null || _settings.ProviderId != "deepseek")
+            {
+                throw new InvalidOperationException("DeepSeek is required for this opt-in live test.");
+            }
+            const string source = """
+                Your project must use at least two sprites, at least one of which must not be a cat.
+                
+                Your project must have at least three scripts total (i.e., not necessarily three per sprite).
+                
+                Your project must use at least one conditional, at least one loop, and at least one variable.
+                
+                Your project must use at least one custom block that you have made yourself (via Make a Block), which must take at least one input.
+                
+                Your project should be more complex than most of those demonstrated in lecture (many of which, though instructive, were quite short) but it can be less complex than Oscartime and Ivy’s Hardest Game.
+                """;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var response = new System.Text.StringBuilder();
+            await foreach (var chunk in _translationProviderFactory.Create(_settings).TranslateAsync(
+                               new TranslationRequest(source, _settings.SourceLanguage, LanguageDirectionResolver.Chinese), timeout.Token))
+            {
+                response.Append(chunk.TextDelta);
+            }
+            var text = HighlightMarkup.ToPlainText(response.ToString());
+            if ((!text.Contains("角色", StringComparison.Ordinal) && !text.Contains("精灵", StringComparison.Ordinal))
+                || !text.Contains("脚本", StringComparison.Ordinal)
+                || !text.Contains("变量", StringComparison.Ordinal)
+                || !text.Contains("输入", StringComparison.Ordinal)
+                || TranslationOutputGuard.IsInstructionEcho(source, text))
+            {
+                throw new InvalidOperationException("Translation quality regression failed.");
+            }
+        }
+        catch (Exception exception)
+        {
+            // No source, response or credentials are written to diagnostics.
+            System.Diagnostics.Debug.WriteLine($"Translation quality test failed: {exception.GetType().Name}");
+            _exitCode = 1;
+        }
+        finally
+        {
+            ExitApplication();
+        }
     }
 
     private async Task RunAiSmokeTestAsync()

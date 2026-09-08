@@ -41,7 +41,25 @@ internal sealed class MockTranslationProvider :
         if (request.Scope == ExplanationScope.CodeAnalysis)
         {
             yield return new TranslationChunk(
-                $"语言判断：这是模拟代码分析，需根据实际语法确认语言。{Environment.NewLine}常见用途：用于演示所选代码片段的典型使用场景。{Environment.NewLine}代码作用：{request.SubjectText.Trim()}。{Environment.NewLine}关键逻辑：请结合变量、调用和控制流阅读。{Environment.NewLine}替代与注意：实际项目中请确认依赖、输入边界和错误处理。",
+                $"""
+                语言判断：
+                这是模拟代码分析，需根据实际语法确认语言。
+
+                常见用途：
+                用于演示所选代码片段的典型使用场景。
+
+                代码作用：
+                {request.SubjectText.Trim()}
+
+                关键逻辑：
+                请结合变量、调用和控制流阅读。
+
+                缩写与命名：
+                模拟模式不推断英文全称。真实 AI 分析会逐项说明缩写全称、中文含义、命名原因与使用习惯；无法确定时会明确标注。
+
+                替代与注意：
+                实际项目中请确认依赖、输入边界和错误处理。
+                """,
                 IsFinal: true);
             yield break;
         }

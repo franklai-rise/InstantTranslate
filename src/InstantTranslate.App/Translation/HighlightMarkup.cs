@@ -159,6 +159,7 @@ internal static class HighlightMarkup
         "常见用途：",
         "代码作用：",
         "关键逻辑：",
+        "缩写与命名：",
         "替代与注意：",
         "Meaning:",
         "Key points:",

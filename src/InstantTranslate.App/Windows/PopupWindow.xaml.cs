@@ -305,7 +305,7 @@ internal partial class PopupWindow : Window
         ApplyVisualStyle(popupVisualStyle);
         ApplyUiLanguage(uiLanguage);
 
-        if (_translatedText.Length > 0)
+        if (_translatedText.Length > 0 && !_isEditingTranslation)
         {
             var completeAfterAppearanceUpdate = _completeTranslationAfterReveal;
             StopTranslationReveal(clearTarget: false);
@@ -560,6 +560,30 @@ internal partial class PopupWindow : Window
         return DragHandle.IsHitTestVisible
                && DragHandle.ActualWidth >= 160
                && DragHandle.ActualHeight >= 28;
+    }
+
+    internal bool VerifyAppearancePreservesEditForVisualTest(string style)
+    {
+        var original = _translatedText;
+        BeginTranslationEditing();
+        if (!_isEditingTranslation) return false;
+        try
+        {
+            TranslationRichTextBox.SelectAll();
+            TranslationRichTextBox.Selection.Text = "Unsaved correction / 未保存的修正";
+            TranslationRichTextBox.SelectAll();
+            var document = TranslationRichTextBox.Document;
+            var selection = TranslationRichTextBox.Selection.Text;
+            var canUndo = TranslationRichTextBox.CanUndo;
+            ApplyAppearance(_englishTranslationFont.Source, _chineseTranslationFont.Source, _uiLanguage, style);
+            if (!ReferenceEquals(document, TranslationRichTextBox.Document)
+                || TranslationRichTextBox.Selection.Text != selection
+                || !canUndo || !TranslationRichTextBox.CanUndo
+                || !_isEditingTranslation || TranslationRichTextBox.IsReadOnly)
+                return false;
+        }
+        finally { CancelTranslationEditing(showStatus: false); }
+        return _translatedText == original && TranslationRichTextBox.IsReadOnly;
     }
 
     internal void ApplySizePresetForVisualTest(WindowSizePreset preset) => ApplySizePreset(preset);

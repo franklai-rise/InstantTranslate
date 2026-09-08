@@ -494,9 +494,10 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                 request.SourceLanguage,
                 request.TargetLanguage,
                 request.Scope);
-            await using var enumerator = provider
-                .ExplainAsync(providerRequest, timeout.Token)
-                .GetAsyncEnumerator(timeout.Token);
+            await using var enumerator = new SafeAsyncEnumerator<TranslationChunk>(
+                provider.ExplainAsync(providerRequest, timeout.Token).GetAsyncEnumerator(timeout.Token),
+                () => _explanationConcurrency.Release());
+            enteredConcurrencySlot = false; // The iterator now owns slot release, including late cleanup.
             var receivedContent = false;
             while (await MoveNextWithExplanationStageTimeoutAsync(
                        enumerator,
@@ -718,7 +719,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             sourceText,
             sourceLanguage,
             targetLanguage);
-        if (savedTranslation is not null)
+        if (savedTranslation is not null
+            && !TranslationOutputGuard.IsInstructionEcho(sourceText, savedTranslation.TargetText))
         {
             performance.MarkCacheHit();
             performance.MarkFirstContent();
@@ -756,7 +758,8 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             targetLanguage,
             settings,
             preparedOptions);
-        if (_translationCache.TryGet(cacheKey, out var cachedTranslation))
+        if (_translationCache.TryGet(cacheKey, out var cachedTranslation)
+            && !TranslationOutputGuard.IsInstructionEcho(sourceText, cachedTranslation))
         {
             performance.MarkCacheHit();
             performance.MarkFirstContent();
@@ -979,9 +982,10 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
                 request.UiLanguage,
                 request.ContextKind,
                 request.History);
-            await using var enumerator = provider
-                .AnswerAsync(providerRequest, timeout.Token)
-                .GetAsyncEnumerator(timeout.Token);
+            await using var enumerator = new SafeAsyncEnumerator<TranslationChunk>(
+                provider.AnswerAsync(providerRequest, timeout.Token).GetAsyncEnumerator(timeout.Token),
+                () => _questionAnswerConcurrency.Release());
+            enteredConcurrencySlot = false;
             var receivedContent = false;
             while (await MoveNextWithQuestionAnswerStageTimeoutAsync(
                        enumerator,
@@ -1200,9 +1204,10 @@ internal sealed class SelectionTranslationCoordinator : IDisposable
             await _translationConcurrency.WaitAsync(timeout.Token).ConfigureAwait(false);
             enteredConcurrencySlot = true;
             performance.MarkQueueCompleted();
-            await using var enumerator = translationProvider
-                .TranslateAsync(request, timeout.Token)
-                .GetAsyncEnumerator(timeout.Token);
+            await using var enumerator = new SafeAsyncEnumerator<TranslationChunk>(
+                translationProvider.TranslateAsync(request, timeout.Token).GetAsyncEnumerator(timeout.Token),
+                () => _translationConcurrency.Release());
+            enteredConcurrencySlot = false;
             var receivedContent = false;
             while (await MoveNextWithStageTimeoutAsync(
                        enumerator,

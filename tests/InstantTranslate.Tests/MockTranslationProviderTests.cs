@@ -72,6 +72,8 @@ public sealed class MockTranslationProviderTests
         var resultChunk = Assert.Single(chunks);
         Assert.Contains("语言判断：", resultChunk.TextDelta, StringComparison.Ordinal);
         Assert.Contains("常见用途：", resultChunk.TextDelta, StringComparison.Ordinal);
+        Assert.Contains("缩写与命名：", resultChunk.TextDelta, StringComparison.Ordinal);
+        Assert.Contains("命名原因与使用习惯", resultChunk.TextDelta, StringComparison.Ordinal);
         Assert.Contains("替代与注意：", resultChunk.TextDelta, StringComparison.Ordinal);
         Assert.True(resultChunk.IsFinal);
     }

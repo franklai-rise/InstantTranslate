@@ -156,7 +156,7 @@ public sealed class AiHistoryStoreTests
         try
         {
             var store = new AiHistoryStore();
-            var recordedAt = DateTimeOffset.Now;
+            var recordedAt = new DateTimeOffset(new DateTime(2026, 8, 28, 12, 0, 0, DateTimeKind.Local));
             var settings = AppSettings.Default with
             {
                 AiHistoryEnabled = false,
@@ -219,11 +219,11 @@ public sealed class AiHistoryStoreTests
         try
         {
             var store = new AiHistoryStore();
-            var firstDay = DateTimeOffset.Now;
+            var firstDay = new DateTimeOffset(new DateTime(2026, 8, 28, 23, 59, 0, DateTimeKind.Local));
             var settings = AppSettings.Default with { AiHistoryDirectory = directory };
 
             await store.AppendManualRecordAsync(settings, CreateManualExplanation(firstDay));
-            await store.AppendManualRecordAsync(settings, CreateManualExplanation(firstDay.AddDays(1)));
+            await store.AppendManualRecordAsync(settings, CreateManualExplanation(firstDay.AddMinutes(2)));
 
             var files = Directory.GetFiles(
                 Path.Combine(directory, "InstantTranslate Records", "Daily Records"),

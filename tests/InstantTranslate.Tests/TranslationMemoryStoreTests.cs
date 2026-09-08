@@ -121,9 +121,40 @@ public sealed class TranslationMemoryStoreTests : IDisposable
         var store = new TranslationMemoryStore(path, protector);
 
         Assert.True(store.LoadFailed);
-        Assert.Throws<InvalidOperationException>(
+        Assert.Throws<InvalidDataException>(
             () => store.AddOrUpdate("new", "新", "en", "zh"));
         Assert.Equal(corruptFile, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void Load_IgnoresNullEntriesWithoutChangingTheOriginalFile()
+    {
+        Directory.CreateDirectory(_directory);
+        var path = Path.Combine(_directory, "null-entry.dat");
+        var protector = new PrefixProtector();
+        var original = protector.Protect("{\"Version\":1,\"Entries\":[null]}"u8.ToArray());
+        File.WriteAllBytes(path, original);
+        var store = new TranslationMemoryStore(path, protector);
+        Assert.False(store.LoadFailed);
+        Assert.Equal(0, store.Count);
+        Assert.Equal(original, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void AddOrUpdate_RejectsUnreadablyLargeFilesAndRollsBack()
+    {
+        var path = Path.Combine(_directory, "oversize.dat");
+        var protector = new SwitchableProtector();
+        var store = new TranslationMemoryStore(path, protector);
+        store.AddOrUpdate("old", "旧", "en", "zh");
+        var original = File.ReadAllBytes(path);
+        protector.ReturnOversizedData = true;
+
+        Assert.Throws<InvalidDataException>(() => store.AddOrUpdate("new", "新", "en", "zh"));
+        Assert.Equal(1, store.Count);
+        Assert.Equal("旧", store.FindExact("old", "en", "zh")?.TargetText);
+        Assert.Equal(original, File.ReadAllBytes(path));
+        Assert.Single(Directory.GetFiles(_directory));
     }
 
     [Theory]
@@ -167,9 +198,11 @@ public sealed class TranslationMemoryStoreTests : IDisposable
     private sealed class SwitchableProtector : ITranslationMemoryProtector
     {
         public bool ThrowOnProtect { get; set; }
+        public bool ReturnOversizedData { get; set; }
 
         public byte[] Protect(byte[] plaintext)
         {
+            if (ReturnOversizedData) return new byte[TranslationMemoryStore.MaximumFileBytes + 1];
             if (ThrowOnProtect)
             {
                 throw new InvalidOperationException("Simulated persistence failure.");

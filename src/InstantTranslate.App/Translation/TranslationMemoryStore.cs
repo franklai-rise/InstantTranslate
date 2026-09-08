@@ -181,7 +181,7 @@ internal sealed class TranslationMemoryStore
         {
             if (_loadFailed)
             {
-                throw new InvalidOperationException(
+                throw new InvalidDataException(
                     "Translation memory could not be read; refusing to overwrite the existing file.");
             }
 
@@ -351,6 +351,10 @@ internal sealed class TranslationMemoryStore
         {
             CryptographicOperations.ZeroMemory(plaintext);
         }
+        if (protectedData.LongLength is <= 0 or > MaximumFileBytes)
+        {
+            throw new InvalidDataException("Translation memory exceeds the readable file size limit.");
+        }
         var temporaryPath = $"{_path}.{Guid.NewGuid():N}.tmp";
         try
         {
@@ -389,9 +393,10 @@ internal sealed class TranslationMemoryStore
                 StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsValidEntry(SavedTranslation entry)
+    private static bool IsValidEntry(SavedTranslation? entry)
     {
-        return !string.IsNullOrWhiteSpace(entry.SourceText)
+        return entry is not null
+            && !string.IsNullOrWhiteSpace(entry.SourceText)
             && !string.IsNullOrWhiteSpace(entry.TargetText)
             && entry.SourceText.Length <= MaximumSourceLength
             && entry.TargetText.Length <= MaximumTargetLength
