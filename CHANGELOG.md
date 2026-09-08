@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.3 - 2026-09-09
+
 ### Fixed
 
 - Reject incomplete or unsuccessful AI stream endings instead of marking truncated text as a completed translation, explanation or answer. Bound individual SSE lines and aggregate response text to protect against malformed responses, without changing normal output budgets or prompts.
@@ -17,6 +19,12 @@
 - Both Bubble 3.0 glass styles now place translation, explanation/code analysis, and Q&A/DeepSeek chat text on opaque rounded reading cards. Soft off-white gradients pick up a faint gray-blue (Glass) or gray-lilac (Color Glass) tint instead of stark pure white. The outer glass, toolbar, tail and Color Glass tints remain translucent.
 - Inset the text viewports and scrollbars from the card corners, account for card padding during automatic sizing, and remove the now-unnecessary glyph halo. Returning from an explanation preserves the original selection and size.
 - Older popup styles keep their existing backgrounds and spacing. High-contrast mode uses system colors instead of off-white cards; settings previews describe the new glass-shell/reading-card appearance.
+
+### Validation and limitations
+
+- Includes 416 passing automated tests plus offline popup, settings and application checks. No new real-network DeepSeek or external-reader regression is claimed for this release.
+- Includes the existing Edge PDF recovery improvements. Zotero's built-in PDF reader compatibility remains unresolved; its old companion plugin is unchanged and may be rejected by Zotero 9.0.6.
+- Windows x64 self-contained package remains unsigned. Existing settings, Windows Credential Manager entries and user records are not included in release assets.
 
 ## 0.7.2 - 2026-09-05
 
